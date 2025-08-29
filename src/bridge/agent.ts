@@ -5,8 +5,33 @@ import ACPFileSystem from '../files/filesystem.js';
 import { SessionManager, Session } from './session.js';
 import { PermissionManager } from './permissions.js';
 
-// Global flag to prevent multiple process error handler registrations
-let globalErrorHandlersRegistered = false;
+/**
+ * Global error handler management for process-level error handling
+ * Ensures process error handlers are registered only once per process
+ */
+class GlobalErrorHandler {
+  private static initialized = false;
+  
+  static initialize(): void {
+    if (GlobalErrorHandler.initialized) return;
+    
+    process.on('uncaughtException', (error) => {
+      console.error('Uncaught exception:', error);
+      process.exit(1);
+    });
+    
+    process.on('unhandledRejection', (reason) => {
+      console.error('Unhandled rejection:', reason);
+      process.exit(1);
+    });
+    
+    GlobalErrorHandler.initialized = true;
+  }
+  
+  static isInitialized(): boolean {
+    return GlobalErrorHandler.initialized;
+  }
+}
 import { 
   InitializeRequest, 
   InitializeResponse,
@@ -425,9 +450,7 @@ export class ClaudeACPAgent implements ACPClient {
   }): Promise<{ content: string }> {
     // Check client capability and use fallback if needed
     if (this.clientCapabilities?.fs?.readTextFile === false) {
-      if (this.config.debug) {
-        console.error('Client filesystem access disabled, using disk fallback');
-      }
+      console.warn(`[ACP] Client filesystem read disabled for session ${params.sessionId}, using disk fallback for: ${params.path}`);
       // Use fallback filesystem directly
       const session = await this.getSession(params.sessionId);
       let content = await this.diskFileSystem.readFile(params.path);
@@ -444,6 +467,9 @@ export class ClaudeACPAgent implements ACPClient {
     }
     
     // Use ACP protocol
+    if (this.config.debug) {
+      console.info(`[ACP] Using client filesystem read for session ${params.sessionId}: ${params.path}`);
+    }
     const requestParams = {
       sessionId: params.sessionId,
       path: params.path,
@@ -460,15 +486,16 @@ export class ClaudeACPAgent implements ACPClient {
   }): Promise<void> {
     // Check client capability and use fallback if needed
     if (this.clientCapabilities?.fs?.writeTextFile === false) {
-      if (this.config.debug) {
-        console.error('Client filesystem access disabled, using disk fallback');
-      }
+      console.warn(`[ACP] Client filesystem write disabled for session ${params.sessionId}, using disk fallback for: ${params.path}`);
       // Use fallback filesystem directly
       await this.diskFileSystem.writeFile(params.path, params.content);
       return;
     }
     
     // Use ACP protocol
+    if (this.config.debug) {
+      console.info(`[ACP] Using client filesystem write for session ${params.sessionId}: ${params.path}`);
+    }
     await this.connection.sendRequest('fs/write_text_file', params);
   }
 
@@ -577,20 +604,8 @@ export class ClaudeACPAgent implements ACPClient {
   // This method is no longer needed but kept for backward compatibility
 
   private setupErrorHandlers(): void {
-    // Only register global process handlers once per process
-    if (!globalErrorHandlersRegistered) {
-      process.on('uncaughtException', (error) => {
-        console.error('Uncaught exception:', error);
-        process.exit(1);
-      });
-
-      process.on('unhandledRejection', (reason) => {
-        console.error('Unhandled rejection:', reason);
-        process.exit(1);
-      });
-      
-      globalErrorHandlersRegistered = true;
-    }
+    // Use centralized global error handler management
+    GlobalErrorHandler.initialize();
   }
   
   /**

@@ -338,39 +338,3 @@ export class PermissionManager {
   }
 }
 
-// Legacy compatibility exports
-export enum FileOperation {
-  READ = 'read',
-  WRITE = 'write',
-  DELETE = 'delete',
-  EXECUTE = 'execute'
-}
-
-export enum ResourceOperation {
-  READ = 'read',
-  WRITE = 'write',
-  LIST = 'list'
-}
-
-export interface PermissionRule {
-  id: string;
-  pattern: string;
-  operation: FileOperation | ResourceOperation | string;
-  allow: boolean;
-  scope: 'once' | 'always' | 'never';
-}
-
-export interface PermissionContext {
-  sessionId: string;
-  userId?: string;
-  workspaceRoot?: string;
-  requestedOperation: string;
-  targetResource: string;
-}
-
-export interface PermissionManagerOptions {
-  defaultAllow?: boolean;
-  allowedTools?: string[];
-  permissionRules?: PermissionRule[];
-  cacheEnabled?: boolean;
-}
