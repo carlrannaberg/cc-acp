@@ -152,7 +152,6 @@ export class ClaudeACPAgent implements ACPClient {
       }
     );
 
-    this.setupAuthMethods();
     this.setupErrorHandlers();
     this.setupPerformanceMonitoring();
   }
@@ -220,6 +219,10 @@ export class ClaudeACPAgent implements ACPClient {
 
     // Store client capabilities for later use
     this.clientCapabilities = params.clientCapabilities;
+    
+    // Set up authentication methods with validation
+    await this.setupAuthMethods();
+    
     this.initialized = true;
 
     return {
@@ -404,14 +407,66 @@ export class ClaudeACPAgent implements ACPClient {
       throw this.createInvalidRequestError(`Unknown auth method: ${params.methodId}`);
     }
 
-    // Handle different authentication methods
-    if (params.methodId === 'api-key' && !this.config.claudeApiKey) {
-      throw this.createAuthError('Claude API key not configured');
+    // Handle different authentication methods with real validation
+    if (params.methodId === 'api-key') {
+      if (!this.config.claudeApiKey) {
+        throw this.createAuthError('Claude API key not configured. Set CLAUDE_API_KEY environment variable.');
+      }
+      
+      // Test API key by creating a minimal Claude SDK query
+      console.info('[ACP] Validating Claude API key authentication');
+      try {
+        const testSDK = this.createClaudeSDK();
+        const testQuery = testSDK.query({
+          prompt: "test",
+          options: { maxTurns: 1, allowedTools: [] }
+        });
+        
+        // Try to get first response to validate authentication
+        const iterator = testQuery[Symbol.asyncIterator]();
+        const firstResult = await iterator.next();
+        
+        if (firstResult.done || !firstResult.value) {
+          throw new Error('No response received - authentication may have failed');
+        }
+        
+        console.info('[ACP] Claude API key authentication validated successfully');
+      } catch (error) {
+        console.error('[ACP] API key authentication failed:', error);
+        throw this.createAuthError(`Claude API key authentication failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     
     if (params.methodId === 'claude-code-subscription') {
-      console.info('[ACP] Using Claude Code subscription authentication');
-      // No additional validation needed - Claude Code SDK will handle authentication
+      console.info('[ACP] Validating Claude Code subscription authentication');
+      
+      // Test Claude Code subscription by attempting a query without API key
+      try {
+        const testSDK = this.createClaudeSDK();
+        const testQuery = testSDK.query({
+          prompt: "test",
+          options: { maxTurns: 1, allowedTools: [] }
+        });
+        
+        const iterator = testQuery[Symbol.asyncIterator]();
+        const firstResult = await iterator.next();
+        
+        if (firstResult.done || !firstResult.value) {
+          throw new Error('No response received');
+        }
+        
+        // Check if authentication was successful by verifying we got a valid response
+        if (firstResult.value.type && firstResult.value.type === 'system') {
+          console.info('[ACP] Claude Code subscription authentication validated successfully');
+        } else {
+          throw new Error('Unexpected response format');
+        }
+      } catch (error) {
+        console.error('[ACP] Claude Code subscription authentication failed:', error);
+        throw this.createAuthError(
+          `Claude Code subscription authentication failed. Please run 'claude auth login' to authenticate: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
 
     return null; // AuthenticateResponse is null according to schema
@@ -595,21 +650,86 @@ export class ClaudeACPAgent implements ACPClient {
     return { code: -32000, message }; // Auth error code from ACP_ERRORS
   }
 
-  private setupAuthMethods(): void {
-    // Always offer Claude Code subscription authentication
-    this.authMethods.push({
-      id: 'claude-code-subscription',
-      name: 'Claude Code Subscription',
-      description: 'Use existing Claude Code login (recommended)'
-    });
+  private async setupAuthMethods(): Promise<void> {
+    // Check Claude Code subscription authentication availability
+    const hasClaudeCodeAuth = await this.checkClaudeCodeAuthentication();
+    if (hasClaudeCodeAuth) {
+      this.authMethods.push({
+        id: 'claude-code-subscription',
+        name: 'Claude Code Subscription',
+        description: 'Use existing Claude Code login (recommended)'
+      });
+    }
 
-    // Also offer API key authentication if available
-    if (this.config.claudeApiKey) {
+    // Check API key authentication availability
+    if (this.config.claudeApiKey && await this.validateApiKey(this.config.claudeApiKey)) {
       this.authMethods.push({
         id: 'api-key',
         name: 'Claude API Key',
         description: 'Authenticate with Claude API key'
       });
+    }
+
+    // Ensure at least one authentication method is available
+    if (this.authMethods.length === 0) {
+      console.warn('[ACP] No valid authentication methods available. Adding Claude Code subscription as fallback.');
+      this.authMethods.push({
+        id: 'claude-code-subscription',
+        name: 'Claude Code Subscription',
+        description: 'Use existing Claude Code login (authentication required)'
+      });
+    }
+  }
+
+  private async checkClaudeCodeAuthentication(): Promise<boolean> {
+    try {
+      // Test Claude Code SDK without API key
+      const testSDK = this.createClaudeSDK();
+      const testQuery = testSDK.query({
+        prompt: "test",
+        options: { maxTurns: 1, allowedTools: [] }
+      });
+      
+      const iterator = testQuery[Symbol.asyncIterator]();
+      const firstResult = await Promise.race([
+        iterator.next(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+      ]);
+      
+      return !firstResult.done && firstResult.value && 
+             typeof firstResult.value === 'object' && 
+             firstResult.value !== null &&
+             'type' in firstResult.value && 
+             firstResult.value.type === 'system';
+    } catch (error) {
+      console.debug('[ACP] Claude Code authentication check failed:', error);
+      return false;
+    }
+  }
+
+  private async validateApiKey(apiKey: string): Promise<boolean> {
+    try {
+      // Store original key and test with provided key
+      const originalKey = this.config.claudeApiKey;
+      this.config.claudeApiKey = apiKey;
+      
+      const testSDK = this.createClaudeSDK();
+      const testQuery = testSDK.query({
+        prompt: "test",
+        options: { maxTurns: 1, allowedTools: [] }
+      });
+      
+      const iterator = testQuery[Symbol.asyncIterator]();
+      const firstResult = await Promise.race([
+        iterator.next(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+      ]);
+      
+      this.config.claudeApiKey = originalKey; // Restore original
+      return !firstResult.done && firstResult.value != null;
+    } catch (error) {
+      console.debug('[ACP] API key validation failed:', error);
+      return false;
     }
   }
 
@@ -795,6 +915,8 @@ export class ClaudeACPAgent implements ACPClient {
               break;
             }
             
+            console.debug('[ACP] Received Claude message:', JSON.stringify(message, null, 2));
+            
             // Convert SDK message to our ClaudeMessage interface
             if (message.type === 'assistant') {
               // Extract text content from Anthropic message
@@ -808,25 +930,62 @@ export class ClaudeACPAgent implements ACPClient {
                 text?: string;
               }
               
-              const contentBlocks = message.message.content as ContentBlock[];
-              const content = contentBlocks
-                .filter((block: ContentBlock): block is TextBlock => block.type === 'text')
-                .map((block: TextBlock) => block.text)
-                .join('');
-                
+              const contentBlocks = message.message?.content as ContentBlock[];
+              if (contentBlocks) {
+                const content = contentBlocks
+                  .filter((block: ContentBlock): block is TextBlock => block.type === 'text')
+                  .map((block: TextBlock) => block.text)
+                  .join('');
+                  
+                yield {
+                  type: 'assistant',
+                  content: content
+                } as ClaudeMessage;
+              }
+            } else if (message.type === 'user' && 'text' in message) {
+              // Handle user message echoes (usually from system init)
+              const textMessage = message as unknown as { text: string };
               yield {
                 type: 'assistant',
-                content: content
+                content: `Echo: ${textMessage.text}`
               } as ClaudeMessage;
+            } else if (message.type === 'system') {
+              // Handle system messages from Claude Code SDK
+              if ('subtype' in message && message.subtype === 'init') {
+                // Skip init message, but log for debugging
+                console.debug('[ACP] Received Claude Code init message');
+              } else if ('text' in message) {
+                const textMessage = message as unknown as { text: string };
+                yield {
+                  type: 'assistant',
+                  content: textMessage.text
+                } as ClaudeMessage;
+              }
             } else if (message.type === 'result') {
               // Handle both success and error result types
               const resultContent = 'result' in message ? message.result : 
-                                  message.subtype === 'error_max_turns' ? 'Maximum turns reached' :
+                                  'subtype' in message && message.subtype === 'error_max_turns' ? 'Maximum turns reached' :
                                   'Execution error occurred';
               yield {
                 type: 'assistant',
-                content: resultContent
+                content: String(resultContent)
               } as ClaudeMessage;
+            } else {
+              // Handle any other message types by trying to extract text content
+              console.debug('[ACP] Unknown message type, attempting to extract text:', message.type);
+              if ('text' in message) {
+                const textMessage = message as unknown as { text: string };
+                yield {
+                  type: 'assistant', 
+                  content: textMessage.text
+                } as ClaudeMessage;
+              } else if ('content' in message) {
+                const contentMessage = message as unknown as { content: unknown };
+                yield {
+                  type: 'assistant',
+                  content: String(contentMessage.content)
+                } as ClaudeMessage;
+              }
             }
           }
         } catch (error) {

@@ -2,9 +2,9 @@
   "metadata": {
     "version": 1,
     "root": "/Users/carl/Development/agents/cc-acp",
-    "createdAt": "2025-08-29T19:37:29.743Z",
-    "updatedAt": "2025-08-29T19:37:29.743Z",
-    "totalFiles": 25
+    "createdAt": "2025-08-29T22:05:50.193Z",
+    "updatedAt": "2025-08-29T22:05:50.193Z",
+    "totalFiles": 27
   },
   "tree": {
     "name": "cc-acp",
@@ -73,6 +73,10 @@
                 "type": "file"
               },
               {
+                "name": "protocol-methods.test.ts",
+                "type": "file"
+              },
+              {
                 "name": "schemas.test.ts",
                 "type": "file"
               },
@@ -137,6 +141,10 @@
                 "type": "file"
               },
               {
+                "name": "path.ts",
+                "type": "file"
+              },
+              {
                 "name": "performance.ts",
                 "type": "file"
               },
@@ -190,6 +198,7 @@
     "src/__tests__/cli.test.ts",
     "src/__tests__/filesystem.test.ts",
     "src/__tests__/performance.test.ts",
+    "src/__tests__/protocol-methods.test.ts",
     "src/__tests__/schemas.test.ts",
     "src/__tests__/setup.test.ts",
     "src/bridge/agent.ts",
@@ -201,6 +210,7 @@
     "src/protocol/connection.ts",
     "src/protocol/schemas.ts",
     "src/utils/errors.ts",
+    "src/utils/path.ts",
     "src/utils/performance.ts",
     "src/utils/types.ts",
     "tests/integration/protocol.test.ts"
@@ -233,6 +243,14 @@
     {
       "from": "src/__tests__/performance.test.ts",
       "to": "src/utils/performance.ts"
+    },
+    {
+      "from": "src/__tests__/protocol-methods.test.ts",
+      "to": "src/bridge/agent.ts"
+    },
+    {
+      "from": "src/__tests__/protocol-methods.test.ts",
+      "to": "src/bridge/session.ts"
     },
     {
       "from": "src/__tests__/schemas.test.ts",
@@ -333,6 +351,10 @@
     {
       "from": "src/utils/types.ts",
       "to": "src/utils/errors.ts"
+    },
+    {
+      "from": "src/utils/types.ts",
+      "to": "src/utils/path.ts"
     }
   ],
   "files": {
@@ -1295,6 +1317,40 @@
       "classes": [],
       "constants": []
     },
+    "src/__tests__/protocol-methods.test.ts": {
+      "imports": [
+        {
+          "from": "../bridge/agent.js",
+          "kind": "import",
+          "imported": [
+            "ClaudeACPAgent"
+          ]
+        },
+        {
+          "from": "stream",
+          "kind": "import",
+          "imported": [
+            "Readable",
+            "Writable",
+            "PassThrough"
+          ]
+        },
+        {
+          "from": "../bridge/session.js",
+          "kind": "import",
+          "imported": [
+            "SessionManager"
+          ]
+        }
+      ],
+      "dependencies": [
+        "src/bridge/agent.ts",
+        "src/bridge/session.ts"
+      ],
+      "functions": [],
+      "classes": [],
+      "constants": []
+    },
     "src/__tests__/schemas.test.ts": {
       "imports": [
         {
@@ -1862,6 +1918,61 @@
               "isPrivate": true
             },
             {
+              "name": "handleBufferOverflow",
+              "params": [],
+              "isAsync": true,
+              "returnType": "Promise<void>",
+              "isPrivate": true
+            },
+            {
+              "name": "isValidStreamUpdate",
+              "params": [
+                {
+                  "name": "update",
+                  "type": "unknown"
+                }
+              ],
+              "isAsync": false,
+              "returnType": "update is Parameters<ACPClient['sessionUpdate']>[0]",
+              "isPrivate": true
+            },
+            {
+              "name": "isErrorUpdate",
+              "params": [
+                {
+                  "name": "update",
+                  "type": "Parameters<ACPClient['sessionUpdate']>[0]"
+                }
+              ],
+              "isAsync": false,
+              "returnType": "boolean",
+              "isPrivate": true
+            },
+            {
+              "name": "isToolCallUpdate",
+              "params": [
+                {
+                  "name": "update",
+                  "type": "Parameters<ACPClient['sessionUpdate']>[0]"
+                }
+              ],
+              "isAsync": false,
+              "returnType": "boolean",
+              "isPrivate": true
+            },
+            {
+              "name": "isAgentMessage",
+              "params": [
+                {
+                  "name": "update",
+                  "type": "Parameters<ACPClient['sessionUpdate']>[0]"
+                }
+              ],
+              "isAsync": false,
+              "returnType": "boolean",
+              "isPrivate": true
+            },
+            {
               "name": "flushStreamBuffer",
               "params": [],
               "isAsync": true,
@@ -2090,6 +2201,11 @@
               "isReadonly": true
             },
             {
+              "name": "MAX_BUFFER_SIZE",
+              "isPrivate": true,
+              "isReadonly": true
+            },
+            {
               "name": "STREAM_FLUSH_INTERVAL",
               "isPrivate": true,
               "isReadonly": true
@@ -2097,6 +2213,10 @@
             {
               "name": "streamFlushTimer",
               "type": "NodeJS.Timeout | null",
+              "isPrivate": true
+            },
+            {
+              "name": "bufferOverflowWarning",
               "isPrivate": true
             },
             {
@@ -2529,7 +2649,7 @@
               "params": [
                 {
                   "name": "message",
-                  "type": "AnyMessage"
+                  "type": "AnyMessage | IncompleteMessage"
                 }
               ],
               "isAsync": true,
@@ -3557,6 +3677,19 @@
         }
       ]
     },
+    "src/utils/path.ts": {
+      "imports": [
+        {
+          "from": "path",
+          "kind": "import",
+          "isNamespace": true
+        }
+      ],
+      "dependencies": [],
+      "functions": [],
+      "classes": [],
+      "constants": []
+    },
     "src/utils/performance.ts": {
       "imports": [
         {
@@ -3799,7 +3932,8 @@
             "ContentBlock",
             "PermissionOption",
             "SessionUpdate",
-            "ToolCallUpdate"
+            "ToolCallUpdate",
+            "McpServer"
           ]
         },
         {
@@ -3837,11 +3971,19 @@
           "imported": [
             "LogLevel"
           ]
+        },
+        {
+          "from": "./path.js",
+          "kind": "export",
+          "imported": [
+            "PathUtils"
+          ]
         }
       ],
       "dependencies": [
         "src/protocol/schemas.ts",
-        "src/utils/errors.ts"
+        "src/utils/errors.ts",
+        "src/utils/path.ts"
       ],
       "functions": [
         {

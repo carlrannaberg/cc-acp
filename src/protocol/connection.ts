@@ -41,6 +41,16 @@ export interface JsonRpcError {
 
 export type AnyMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse;
 
+// Message that might be missing the jsonrpc field (for incoming messages)
+type IncompleteMessage = {
+  jsonrpc?: '2.0';
+  id?: string | number;
+  method?: string;
+  params?: unknown;
+  result?: unknown;
+  error?: JsonRpcError;
+};
+
 export interface PendingResponse {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -139,11 +149,12 @@ export class Connection {
     }
   }
 
-  private async processMessage(message: AnyMessage): Promise<void> {
+  private async processMessage(message: AnyMessage | IncompleteMessage): Promise<void> {
     this.debugLog('Processing message:', message);
 
-    // Validate JSON-RPC 2.0 format
-    if (message.jsonrpc !== '2.0') {
+    // More lenient JSON-RPC 2.0 validation - allow messages without jsonrpc field for compatibility
+    if ('jsonrpc' in message && message.jsonrpc !== '2.0') {
+      console.error('[ACP] Invalid JSON-RPC version:', message.jsonrpc, 'Expected: 2.0', 'Message:', message);
       if ('id' in message && message.id !== undefined) {
         await this.sendErrorResponse(
           message.id,
@@ -152,6 +163,11 @@ export class Connection {
         );
       }
       return;
+    }
+    
+    // Add jsonrpc field if missing (for compatibility)
+    if (!('jsonrpc' in message)) {
+      (message as IncompleteMessage).jsonrpc = '2.0';
     }
 
     if ('method' in message && 'id' in message) {
