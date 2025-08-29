@@ -404,9 +404,14 @@ export class ClaudeACPAgent implements ACPClient {
       throw this.createInvalidRequestError(`Unknown auth method: ${params.methodId}`);
     }
 
-    // For now, just validate that we have the API key
+    // Handle different authentication methods
     if (params.methodId === 'api-key' && !this.config.claudeApiKey) {
       throw this.createAuthError('Claude API key not configured');
+    }
+    
+    if (params.methodId === 'claude-code-subscription') {
+      console.info('[ACP] Using Claude Code subscription authentication');
+      // No additional validation needed - Claude Code SDK will handle authentication
     }
 
     return null; // AuthenticateResponse is null according to schema
@@ -591,6 +596,14 @@ export class ClaudeACPAgent implements ACPClient {
   }
 
   private setupAuthMethods(): void {
+    // Always offer Claude Code subscription authentication
+    this.authMethods.push({
+      id: 'claude-code-subscription',
+      name: 'Claude Code Subscription',
+      description: 'Use existing Claude Code login (recommended)'
+    });
+
+    // Also offer API key authentication if available
     if (this.config.claudeApiKey) {
       this.authMethods.push({
         id: 'api-key',
@@ -744,8 +757,9 @@ export class ClaudeACPAgent implements ACPClient {
   }
 
   private createClaudeSDK(): ClaudeSDK {
+    // API key is optional - Claude Code SDK can use existing authentication
     if (!this.config.claudeApiKey) {
-      throw new Error('Claude API key is required. Set CLAUDE_API_KEY environment variable.');
+      console.info('[ACP] No CLAUDE_API_KEY found, using Claude Code subscription authentication');
     }
 
     return {

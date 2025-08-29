@@ -104,7 +104,7 @@ Options:
 
 Environment Variables:
   DEBUG              Enable debug logging
-  CLAUDE_API_KEY     API key for Claude SDK
+  CLAUDE_API_KEY     API key for Claude SDK (optional if using Claude Code subscription)
   ACP_LOG_LEVEL      Logging verbosity (error/warn/info/debug)
   ACP_TIMEOUT        Session timeout in milliseconds
 

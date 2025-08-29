@@ -22,18 +22,28 @@ npm link
 
 Add to your Zed settings.json:
 
+**Option 1: Use your Claude Code subscription (recommended)**
 ```json
 {
-  "assistant": {
-    "version": "2",
-    "provider": {
-      "name": "claude-code",
-      "config": {
-        "command": "claude-code-acp",
-        "args": [],
-        "env": {
-          "CLAUDE_API_KEY": "your-api-key"
-        }
+  "agent_servers": {
+    "Claude Code": {
+      "command": "claude-code-acp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
+**Option 2: Use a separate API key**
+```json
+{
+  "agent_servers": {
+    "Claude Code": {
+      "command": "claude-code-acp",
+      "args": [],
+      "env": {
+        "CLAUDE_API_KEY": "sk-ant-your-api-key"
       }
     }
   }
@@ -49,7 +59,7 @@ Add to your Zed settings.json:
 
 ## Environment Variables
 
-- `CLAUDE_API_KEY`: Your Anthropic API key (required)
+- `CLAUDE_API_KEY`: Your Anthropic API key (optional - only needed if not using Claude Code subscription)
 - `DEBUG`: Enable debug logging (optional)
 - `ACP_LOG_LEVEL`: Set log level: error|warn|info|debug (optional)
 - `ACP_TIMEOUT`: Session timeout in milliseconds (default: 1800000)
