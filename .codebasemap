@@ -1,0 +1,381 @@
+{
+  "metadata": {
+    "version": 1,
+    "root": "/Users/carl/Development/agents/cc-acp",
+    "createdAt": "2025-08-29T10:56:15.354Z",
+    "updatedAt": "2025-08-29T10:56:15.354Z",
+    "totalFiles": 7
+  },
+  "tree": {
+    "name": "cc-acp",
+    "type": "dir",
+    "children": [
+      {
+        "name": "src",
+        "type": "dir",
+        "children": [
+          {
+            "name": "bridge",
+            "type": "dir",
+            "children": [
+              {
+                "name": "agent.ts",
+                "type": "file"
+              },
+              {
+                "name": "permissions.ts",
+                "type": "file"
+              },
+              {
+                "name": "session.ts",
+                "type": "file"
+              }
+            ]
+          },
+          {
+            "name": "files",
+            "type": "dir",
+            "children": [
+              {
+                "name": "resolver.ts",
+                "type": "file"
+              }
+            ]
+          },
+          {
+            "name": "protocol",
+            "type": "dir",
+            "children": [
+              {
+                "name": "connection.ts",
+                "type": "file"
+              },
+              {
+                "name": "schemas.ts",
+                "type": "file"
+              }
+            ]
+          },
+          {
+            "name": "index.ts",
+            "type": "file"
+          }
+        ]
+      }
+    ]
+  },
+  "nodes": [
+    "src/bridge/agent.ts",
+    "src/bridge/permissions.ts",
+    "src/bridge/session.ts",
+    "src/files/resolver.ts",
+    "src/index.ts",
+    "src/protocol/connection.ts",
+    "src/protocol/schemas.ts"
+  ],
+  "edges": [
+    {
+      "from": "src/index.ts",
+      "to": "src/bridge/agent.ts"
+    },
+    {
+      "from": "src/index.ts",
+      "to": "src/protocol/connection.ts"
+    },
+    {
+      "from": "src/index.ts",
+      "to": "src/protocol/schemas.ts"
+    }
+  ],
+  "files": {
+    "src/bridge/agent.ts": {
+      "imports": [],
+      "dependencies": [],
+      "functions": [],
+      "classes": [
+        {
+          "name": "ACPAgent",
+          "isExported": true,
+          "methods": [
+            {
+              "name": "start",
+              "params": [],
+              "isAsync": true,
+              "returnType": "Promise<void>"
+            },
+            {
+              "name": "stop",
+              "params": [],
+              "isAsync": true,
+              "returnType": "Promise<void>"
+            }
+          ],
+          "properties": []
+        }
+      ],
+      "constants": []
+    },
+    "src/bridge/permissions.ts": {
+      "imports": [],
+      "dependencies": [],
+      "functions": [],
+      "classes": [
+        {
+          "name": "PermissionManager",
+          "isExported": true,
+          "methods": [
+            {
+              "name": "checkFileAccess",
+              "params": [
+                {
+                  "name": "path",
+                  "type": "string"
+                },
+                {
+                  "name": "operation",
+                  "type": "FileOperation"
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<boolean>"
+            },
+            {
+              "name": "checkToolExecution",
+              "params": [
+                {
+                  "name": "toolName",
+                  "type": "string"
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<boolean>"
+            },
+            {
+              "name": "checkResourceAccess",
+              "params": [
+                {
+                  "name": "resourceId",
+                  "type": "string"
+                },
+                {
+                  "name": "operation",
+                  "type": "ResourceOperation"
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<boolean>"
+            }
+          ],
+          "properties": []
+        }
+      ],
+      "constants": []
+    },
+    "src/bridge/session.ts": {
+      "imports": [],
+      "dependencies": [],
+      "functions": [],
+      "classes": [
+        {
+          "name": "SessionManager",
+          "isExported": true,
+          "methods": [
+            {
+              "name": "createSession",
+              "params": [
+                {
+                  "name": "sessionId",
+                  "type": "string"
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<Session>"
+            },
+            {
+              "name": "getSession",
+              "params": [
+                {
+                  "name": "sessionId",
+                  "type": "string"
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<Session | null>"
+            },
+            {
+              "name": "destroySession",
+              "params": [
+                {
+                  "name": "sessionId",
+                  "type": "string"
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<void>"
+            }
+          ],
+          "properties": []
+        },
+        {
+          "name": "Session",
+          "isExported": true,
+          "methods": [],
+          "properties": []
+        }
+      ],
+      "constants": []
+    },
+    "src/files/resolver.ts": {
+      "imports": [],
+      "dependencies": [],
+      "functions": [],
+      "classes": [
+        {
+          "name": "FileResolver",
+          "isExported": true,
+          "methods": [
+            {
+              "name": "resolvePath",
+              "params": [
+                {
+                  "name": "path",
+                  "type": "string"
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<ResolvedPath>"
+            },
+            {
+              "name": "findFiles",
+              "params": [
+                {
+                  "name": "pattern",
+                  "type": "string"
+                },
+                {
+                  "name": "options",
+                  "type": "FindOptions",
+                  "optional": true
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<string[]>"
+            },
+            {
+              "name": "getFileInfo",
+              "params": [
+                {
+                  "name": "path",
+                  "type": "string"
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<FileInfo>"
+            },
+            {
+              "name": "isAccessible",
+              "params": [
+                {
+                  "name": "path",
+                  "type": "string"
+                },
+                {
+                  "name": "operation",
+                  "type": "string"
+                }
+              ],
+              "isAsync": true,
+              "returnType": "Promise<boolean>"
+            }
+          ],
+          "properties": []
+        }
+      ],
+      "constants": []
+    },
+    "src/index.ts": {
+      "imports": [
+        {
+          "from": "./bridge/agent",
+          "kind": "export"
+        },
+        {
+          "from": "./protocol/connection",
+          "kind": "export"
+        },
+        {
+          "from": "./protocol/schemas",
+          "kind": "export"
+        }
+      ],
+      "dependencies": [
+        "src/bridge/agent.ts",
+        "src/protocol/connection.ts",
+        "src/protocol/schemas.ts"
+      ],
+      "functions": [],
+      "classes": [],
+      "constants": []
+    },
+    "src/protocol/connection.ts": {
+      "imports": [],
+      "dependencies": [],
+      "functions": [],
+      "classes": [
+        {
+          "name": "Connection",
+          "isExported": true,
+          "methods": [],
+          "properties": []
+        }
+      ],
+      "constants": []
+    },
+    "src/protocol/schemas.ts": {
+      "imports": [
+        {
+          "from": "zod",
+          "kind": "import",
+          "imported": [
+            "z"
+          ]
+        }
+      ],
+      "dependencies": [],
+      "functions": [],
+      "classes": [],
+      "constants": [
+        {
+          "name": "MessageSchema",
+          "initKind": "unknown",
+          "isExported": true
+        },
+        {
+          "name": "RequestSchema",
+          "initKind": "unknown",
+          "isExported": true
+        },
+        {
+          "name": "ResponseSchema",
+          "initKind": "unknown",
+          "isExported": true
+        },
+        {
+          "name": "ErrorSchema",
+          "initKind": "unknown",
+          "isExported": true
+        },
+        {
+          "name": "ToolSchema",
+          "initKind": "unknown",
+          "isExported": true
+        },
+        {
+          "name": "ResourceSchema",
+          "initKind": "unknown",
+          "isExported": true
+        }
+      ]
+    }
+  }
+}
