@@ -512,17 +512,12 @@ export class Session {
   }
   
   /**
-   * Buffer stream updates for backpressure handling with overflow protection
+   * Buffer stream updates with intelligent backpressure handling
    */
   private async bufferStreamUpdate(update: Parameters<ACPClient['sessionUpdate']>[0]): Promise<void> {
-    // Check for buffer overflow to prevent memory exhaustion
+    // Check for buffer overflow and handle gracefully
     if (this.streamBuffer.length >= this.MAX_BUFFER_SIZE) {
-      if (!this.bufferOverflowWarning) {
-        console.error(`Stream buffer overflow in session ${this.id}, dropping oldest messages`);
-        this.bufferOverflowWarning = true;
-      }
-      // Drop oldest messages to prevent memory exhaustion
-      this.streamBuffer.splice(0, this.streamBuffer.length - this.STREAM_BUFFER_SIZE);
+      await this.handleBufferOverflow();
     }
     
     this.streamBuffer.push(update);
@@ -532,6 +527,93 @@ export class Session {
     } else if (!this.streamFlushTimer) {
       this.streamFlushTimer = setTimeout(() => this.flushStreamBuffer(), this.STREAM_FLUSH_INTERVAL);
     }
+  }
+  
+  /**
+   * Handle buffer overflow with intelligent message prioritization
+   */
+  private async handleBufferOverflow(): Promise<void> {
+    if (!this.bufferOverflowWarning) {
+      // Notify client of backpressure once
+      await this.acpClient.sessionUpdate({
+        sessionId: this.id,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: {
+            type: 'text',
+            text: '⚠️ High message volume detected, optimizing message delivery...'
+          }
+        }
+      }).catch(() => {}); // Don't let notification failures cause more problems
+      
+      this.bufferOverflowWarning = true;
+      console.warn(`Stream buffer overflow in session ${this.id}, applying intelligent filtering`);
+    }
+    
+    // Apply intelligent filtering - preserve important messages
+    const filteredBuffer = this.streamBuffer.filter((update, index) => {
+      // Type guard: ensure update has the expected shape
+      if (!this.isValidStreamUpdate(update)) return false;
+      
+      // Always keep error messages
+      if (this.isErrorUpdate(update)) return true;
+      
+      // Keep latest tool calls and completions
+      if (this.isToolCallUpdate(update) && index >= this.streamBuffer.length - 10) return true;
+      
+      // Keep some recent agent messages (every 3rd message)
+      if (this.isAgentMessage(update) && index % 3 === 0) return true;
+      
+      return false;
+    });
+    
+    // If filtering didn't help enough, keep most recent messages
+    this.streamBuffer = filteredBuffer.length <= this.STREAM_BUFFER_SIZE 
+      ? filteredBuffer 
+      : this.streamBuffer.slice(-this.STREAM_BUFFER_SIZE);
+  }
+  
+  /**
+   * Type guard to check if update has valid stream update structure
+   */
+  private isValidStreamUpdate(update: unknown): update is Parameters<ACPClient['sessionUpdate']>[0] {
+    if (typeof update !== 'object' || update === null) {
+      return false;
+    }
+    
+    const updateObj = update as Record<string, unknown>;
+    if (!('update' in updateObj) || typeof updateObj.update !== 'object' || updateObj.update === null) {
+      return false;
+    }
+    
+    const nestedUpdate = updateObj.update as Record<string, unknown>;
+    return 'sessionUpdate' in nestedUpdate;
+  }
+  
+  /**
+   * Check if update contains error information
+   */
+  private isErrorUpdate(update: Parameters<ACPClient['sessionUpdate']>[0]): boolean {
+    return update.update.sessionUpdate === 'agent_message_chunk' &&
+           update.update.content?.type === 'text' &&
+           typeof update.update.content.text === 'string' &&
+           (update.update.content.text.toLowerCase().includes('error') ||
+            update.update.content.text.toLowerCase().includes('failed'));
+  }
+  
+  /**
+   * Check if update is a tool call
+   */
+  private isToolCallUpdate(update: Parameters<ACPClient['sessionUpdate']>[0]): boolean {
+    return update.update.sessionUpdate === 'tool_call' ||
+           update.update.sessionUpdate === 'tool_call_update';
+  }
+  
+  /**
+   * Check if update is an agent message
+   */
+  private isAgentMessage(update: Parameters<ACPClient['sessionUpdate']>[0]): boolean {
+    return update.update.sessionUpdate === 'agent_message_chunk';
   }
   
   /**
@@ -701,67 +783,40 @@ export class Session {
   }
 
   /**
-   * CRITICAL FIX: Recover from errors with comprehensive state management and health validation
+   * Handle session errors with simple, focused cleanup
    */
   private async recoverFromError(errorMessage: string): Promise<void> {
-    try {
-      // Perform state cleanup
-      await this.cleanupErrorState(`Error recovery: ${errorMessage}`);
-      
-      // Validate session is still usable
-      const sessionHealthy = await this.validateSessionHealth();
-      
-      if (!sessionHealthy) {
-        // Session is corrupted, mark for disposal
-        this.disposed = true;
-        await this.acpClient.sessionUpdate({
-          sessionId: this.id,
-          update: {
-            sessionUpdate: 'agent_message_chunk',
-            content: {
-              type: 'text',
-              text: `Session corrupted and needs restart: ${errorMessage}`
-            }
-          }
-        }).catch(() => {});
-        return;
-      }
-      
-      // Send recovery notification
-      await this.acpClient.sessionUpdate({
-        sessionId: this.id,
-        update: {
-          sessionUpdate: 'agent_message_chunk',
-          content: {
-            type: 'text',
-            text: `Error recovered: ${errorMessage}. Session continues normally.`
-          }
-        }
-      }).catch(() => {}); // Ignore session update errors during recovery
-      
-      // Reset session state for next operation
+    // Log error for diagnosis - don't hide issues
+    console.error(`Session ${this.id} error:`, errorMessage);
+    
+    // Clean up only what's directly affected by the error
+    if (errorMessage.includes('cancelled') || errorMessage.includes('abort')) {
+      // Cancellation errors - just clean up pending operations
       this.pendingPrompt = null;
+      return;
+    }
+    
+    if (errorMessage.includes('memory') || errorMessage.includes('overflow')) {
+      // Memory issues - clean up conversation history
+      this.manageConversationMemory();
       this.bufferOverflowWarning = false;
-      
-    } catch (recoveryError) {
-      console.error(`Fatal error during recovery for session ${this.id}:`, recoveryError);
-      this.disposed = true;
+      return;
     }
-  }
-  
-  /**
-   * Validate session health to determine if recovery is possible
-   */
-  private async validateSessionHealth(): Promise<boolean> {
-    try {
-      // Check critical components
-      return !this.disposed && 
-             this.fileSystem !== null &&
-             this.conversationHistory.length < this.MAX_CONVERSATION_HISTORY &&
-             process.memoryUsage().heapUsed / (1024 * 1024) < this.MAX_MEMORY_MB;
-    } catch {
-      return false;
+    
+    if (errorMessage.includes('permission')) {
+      // Permission issues - clear permission cache
+      const agent = this.acpClient as ACPClientWithPermissions;
+      if (agent.permissionManager) {
+        agent.permissionManager.clearCache();
+      }
+      return;
     }
+    
+    // For unknown errors, perform basic cleanup but don't mask the issue
+    this.pendingPrompt = null;
+    
+    // Let the error bubble up so it can be properly diagnosed
+    // Don't try to "recover" from errors we don't understand
   }
 
   /**

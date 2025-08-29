@@ -228,7 +228,10 @@ describe('ACP Protocol Methods', () => {
   });
 
   describe('Client Capabilities', () => {
-    it('should check fs capabilities before read operations', async () => {
+    it('should use fallback when fs read capability is disabled', async () => {
+      const mockReadFile = jest.spyOn(agent['diskFileSystem'], 'readFile');
+      mockReadFile.mockResolvedValue('fallback content');
+      
       // Initialize without fs capabilities
       await testAgent.handleMethod('initialize', { 
         protocolVersion: 1,
@@ -244,16 +247,20 @@ describe('ACP Protocol Methods', () => {
         mcpServers: []
       }) as { sessionId: string };
       
-      // Should throw when capability is false
-      await expect(agent.readTextFile({
+      // Should use fallback filesystem when capability is disabled
+      const result = await agent.readTextFile({
         sessionId: newSessionResult.sessionId,
         path: '/test/file.txt'
-      })).rejects.toMatchObject({
-        message: expect.stringContaining('does not support readTextFile')
       });
+      
+      expect(result.content).toBe('fallback content');
+      expect(mockReadFile).toHaveBeenCalledWith('/test/file.txt');
     });
 
-    it('should check fs capabilities before write operations', async () => {
+    it('should use fallback when fs write capability is disabled', async () => {
+      const mockWriteFile = jest.spyOn(agent['diskFileSystem'], 'writeFile');
+      mockWriteFile.mockResolvedValue();
+      
       // Initialize without fs capabilities
       await testAgent.handleMethod('initialize', { 
         protocolVersion: 1,
@@ -269,14 +276,14 @@ describe('ACP Protocol Methods', () => {
         mcpServers: []
       }) as { sessionId: string };
       
-      // Should throw when capability is false
-      await expect(agent.writeTextFile({
+      // Should use fallback filesystem when capability is disabled
+      await agent.writeTextFile({
         sessionId: newSessionResult.sessionId,
         path: '/test/file.txt',
-        content: 'test'
-      })).rejects.toMatchObject({
-        message: expect.stringContaining('does not support writeTextFile')
+        content: 'test content'
       });
+      
+      expect(mockWriteFile).toHaveBeenCalledWith('/test/file.txt', 'test content');
     });
 
     it('should allow operations when capabilities are not specified', async () => {
@@ -304,12 +311,7 @@ describe('ACP Protocol Methods', () => {
   });
 
   describe('MCP Servers', () => {
-    it('should store mcpServers in session config', async () => {
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
-      
-      // Set debug mode
-      testAgent.config.debug = true;
-      
+    it('should reject mcpServers in session creation', async () => {
       await testAgent.handleMethod('initialize', { 
         protocolVersion: 1 
       });
@@ -318,20 +320,16 @@ describe('ACP Protocol Methods', () => {
         { name: 'test-server', command: 'test', args: [], env: [] }
       ];
       
-      const result = await testAgent.handleMethod('session/new', {
+      // Should throw when MCP servers are provided
+      await expect(testAgent.handleMethod('session/new', {
         cwd: '/test',
         mcpServers
+      })).rejects.toMatchObject({
+        message: expect.stringContaining('MCP servers not implemented')
       });
-      
-      // Should log MCP servers in debug mode
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('MCP servers configured but not yet implemented')
-      );
-      
-      consoleSpy.mockRestore();
     });
 
-    it('should update mcpServers on session load', async () => {
+    it('should reject mcpServers in session load', async () => {
       await testAgent.handleMethod('initialize', { 
         protocolVersion: 1 
       });
@@ -345,14 +343,14 @@ describe('ACP Protocol Methods', () => {
         { name: 'updated-server', command: 'test', args: [], env: [] }
       ];
       
-      await testAgent.handleMethod('session/load', {
+      // Should throw when MCP servers are provided
+      await expect(testAgent.handleMethod('session/load', {
         sessionId: newSessionResult.sessionId,
         cwd: '/new-test',
         mcpServers: newMcpServers
+      })).rejects.toMatchObject({
+        message: expect.stringContaining('MCP servers not implemented')
       });
-      
-      const session = await testAgent.sessionManager.getSession(newSessionResult.sessionId);
-      expect(session?.config.mcpServers).toEqual(newMcpServers);
     });
   });
 });

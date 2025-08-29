@@ -215,14 +215,20 @@ export class ClaudeACPAgent implements ACPClient {
     this.ensureInitialized();
     
     const sessionId = randomUUID();
+    // Fail fast if MCP servers are provided - not yet implemented
+    if (params.mcpServers && params.mcpServers.length > 0) {
+      throw this.createInvalidRequestError(
+        `MCP servers not implemented in this version. Found ${params.mcpServers.length} server(s). Please remove from configuration.`
+      );
+    }
+
     const sessionConfig: Config = {
       cwd: params.cwd,
       enableSmartSearch: this.config.enableSmartSearch,
       respectGitignore: this.config.respectGitignore,
       debug: this.config.debug,
       maxConcurrentSessions: this.config.maxSessions,
-      sessionTimeoutMs: this.config.sessionTimeoutMs,
-      mcpServers: params.mcpServers // Store MCP servers for potential future use
+      sessionTimeoutMs: this.config.sessionTimeoutMs
     };
 
     // Create Claude SDK instance
@@ -237,10 +243,6 @@ export class ClaudeACPAgent implements ACPClient {
       this
     );
     
-    // Log MCP servers configuration for transparency (future implementation)
-    if (params.mcpServers && params.mcpServers.length > 0 && this.config.debug) {
-      console.error(`MCP servers configured but not yet implemented: ${params.mcpServers.map(s => s.name).join(', ')}`);
-    }
 
     if (this.config.debug) {
       console.error(`Created session: ${sessionId} in ${params.cwd}`);
@@ -260,9 +262,15 @@ export class ClaudeACPAgent implements ACPClient {
       throw this.createSessionNotFoundError(`Session not found: ${params.sessionId}`);
     }
 
+    // Fail fast if MCP servers are provided - not yet implemented
+    if (params.mcpServers && params.mcpServers.length > 0) {
+      throw this.createInvalidRequestError(
+        `MCP servers not implemented in this version. Found ${params.mcpServers.length} server(s). Please remove from configuration.`
+      );
+    }
+
     // Update session configuration
     session.config.cwd = params.cwd;
-    session.config.mcpServers = params.mcpServers; // Update MCP servers
     session.updateLastUsed();
 
     if (this.config.debug) {
@@ -412,12 +420,27 @@ export class ClaudeACPAgent implements ACPClient {
     line?: number | null;
     limit?: number | null;
   }): Promise<{ content: string }> {
-    // Check client capability
+    // Check client capability and use fallback if needed
     if (this.clientCapabilities?.fs?.readTextFile === false) {
-      throw this.createInvalidRequestError('Client does not support readTextFile capability');
+      if (this.config.debug) {
+        console.error('Client filesystem access disabled, using disk fallback');
+      }
+      // Use fallback filesystem directly
+      const session = await this.getSession(params.sessionId);
+      let content = await this.diskFileSystem.readFile(params.path);
+      
+      // Apply line/limit filtering if requested
+      if (params.line !== undefined && params.line !== null || params.limit !== undefined && params.limit !== null) {
+        const lines = content.split('\n');
+        const startLine = (params.line ?? 1) - 1; // Convert to 0-based
+        const endLine = params.limit ? startLine + params.limit : lines.length;
+        content = lines.slice(startLine, endLine).join('\n');
+      }
+      
+      return { content };
     }
     
-    // Convert null to undefined for the request
+    // Use ACP protocol
     const requestParams = {
       sessionId: params.sessionId,
       path: params.path,
@@ -432,11 +455,17 @@ export class ClaudeACPAgent implements ACPClient {
     path: string;
     content: string;
   }): Promise<void> {
-    // Check client capability
+    // Check client capability and use fallback if needed
     if (this.clientCapabilities?.fs?.writeTextFile === false) {
-      throw this.createInvalidRequestError('Client does not support writeTextFile capability');
+      if (this.config.debug) {
+        console.error('Client filesystem access disabled, using disk fallback');
+      }
+      // Use fallback filesystem directly
+      await this.diskFileSystem.writeFile(params.path, params.content);
+      return;
     }
     
+    // Use ACP protocol
     await this.connection.sendRequest('fs/write_text_file', params);
   }
 
