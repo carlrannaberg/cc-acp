@@ -1,12 +1,14 @@
 import { ReadableStream, WritableStream } from 'node:stream/web';
 import { z } from 'zod';
+import * as path from 'path';
 
 // Import protocol types to avoid duplication
 import {
   ContentBlock,
   PermissionOption,
   SessionUpdate,
-  ToolCallUpdate
+  ToolCallUpdate,
+  McpServer
 } from '../protocol/schemas.js';
 
 // Import error types to avoid duplication  
@@ -28,6 +30,8 @@ export interface Config {
   maxConcurrentSessions?: number;
   /** Session timeout in milliseconds */
   sessionTimeoutMs?: number;
+  /** MCP (Model Context Protocol) servers configuration */
+  mcpServers?: McpServer[];
 }
 
 /**
@@ -399,7 +403,6 @@ export namespace PathUtils {
    * Normalize file path to absolute path
    */
   export function normalizePath(filePath: string, cwd = process.cwd()): string {
-    const path = require('path');
     if (path.isAbsolute(filePath)) {
       return path.normalize(filePath);
     }
@@ -412,7 +415,6 @@ export namespace PathUtils {
    * Verify path is within project boundaries (prevent directory traversal)
    */
   export function isWithinRoot(filePath: string, rootPath: string): boolean {
-    const path = require('path');
     const normalized = path.normalize(filePath);
     const normalizedRoot = path.normalize(rootPath);
     

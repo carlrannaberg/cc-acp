@@ -79,12 +79,21 @@ export class ACPFileSystem implements FileSystemService {
   constructor(
     private client: ACPClient,
     private sessionId: string,
-    private fallback: FileSystemService = new DiskFileSystem()
+    private fallback: FileSystemService = new DiskFileSystem(),
+    private sessionCwd?: string // Session's current working directory
   ) {}
+  
+  /**
+   * Centralized path resolution for all filesystem operations
+   * Ensures consistent path normalization using session CWD
+   */
+  private resolvePath(inputPath: string): string {
+    return PathUtils.normalizePath(inputPath, this.sessionCwd);
+  }
 
   async readFile(filePath: string): Promise<string> {
-    // Normalize path to absolute
-    const normalizedPath = PathUtils.normalizePath(filePath);
+    // Use centralized path resolution
+    const normalizedPath = this.resolvePath(filePath);
     
     // Check cache first
     const cached = this.getCachedContent(normalizedPath);
@@ -122,7 +131,7 @@ export class ACPFileSystem implements FileSystemService {
   }
 
   async writeFile(filePath: string, content: string): Promise<void> {
-    const normalizedPath = PathUtils.normalizePath(filePath);
+    const normalizedPath = this.resolvePath(filePath);
     
     try {
       // Always use ACP for writes to maintain consistency with editor
@@ -147,14 +156,14 @@ export class ACPFileSystem implements FileSystemService {
   }
 
   async stat(filePath: string): Promise<Stats> {
-    const normalizedPath = PathUtils.normalizePath(filePath);
+    const normalizedPath = this.resolvePath(filePath);
     
     // Use fallback for stat operations as ACP may not provide full stat info
     return this.fallback.stat(normalizedPath);
   }
 
   async exists(filePath: string): Promise<boolean> {
-    const normalizedPath = PathUtils.normalizePath(filePath);
+    const normalizedPath = this.resolvePath(filePath);
     
     try {
       // First try to read through ACP (checks unsaved buffers)
@@ -170,14 +179,14 @@ export class ACPFileSystem implements FileSystemService {
   }
 
   async readdir(dirPath: string): Promise<string[]> {
-    const normalizedPath = PathUtils.normalizePath(dirPath);
+    const normalizedPath = this.resolvePath(dirPath);
     
     // Use fallback for directory operations
     return this.fallback.readdir(normalizedPath);
   }
 
   async mkdir(dirPath: string, options?: { recursive?: boolean }): Promise<void> {
-    const normalizedPath = PathUtils.normalizePath(dirPath);
+    const normalizedPath = this.resolvePath(dirPath);
     
     // Use fallback for directory creation
     return this.fallback.mkdir(normalizedPath, options);

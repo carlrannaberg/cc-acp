@@ -26,6 +26,7 @@ import {
   ToolCallUpdate,
   PermissionOption,
   ContentBlock,
+  ClientCapabilities,
   initializeRequestSchema,
   newSessionRequestSchema,
   loadSessionRequestSchema,
@@ -67,6 +68,7 @@ export class ClaudeACPAgent implements ACPClient {
   private authMethods: Array<{ id: string; name: string; description?: string }> = [];
   private diskFileSystem: FileSystemService;
   public permissionManager: PermissionManager; // Make public for Session access
+  private clientCapabilities?: ClientCapabilities; // Store client capabilities from initialize
   
   // Connection pooling for Claude SDK
   private claudeSDKPool = new Map<string, { sdk: ClaudeSDK; lastUsed: number; inUse: boolean }>();
@@ -100,7 +102,7 @@ export class ClaudeACPAgent implements ACPClient {
     diskFileSystem?: FileSystemService
   ) {
     // Create default disk filesystem if not provided
-    this.diskFileSystem = diskFileSystem || new ACPFileSystem(this, '', undefined);
+    this.diskFileSystem = diskFileSystem || new ACPFileSystem(this, '', undefined, process.cwd());
     
     // Initialize permission manager
     this.permissionManager = new PermissionManager(this, '');
@@ -136,29 +138,29 @@ export class ClaudeACPAgent implements ACPClient {
         case 'initialize':
           return await this.initialize(this.validateParams(initializeRequestSchema, params));
           
-        case 'newSession':
+        case 'session/new':
           return await this.newSession(this.validateParams(newSessionRequestSchema, params));
           
-        case 'loadSession':
+        case 'session/load':
           return await this.loadSession(this.validateParams(loadSessionRequestSchema, params));
           
-        case 'prompt':
+        case 'session/prompt':
           return await this.prompt(this.validateParams(promptRequestSchema, params));
           
         case 'authenticate':
           return await this.authenticate(this.validateParams(authenticateRequestSchema, params));
           
-        case 'cancel':
+        case 'session/cancel':
           await this.cancel(this.validateParams(cancelNotificationSchema, params));
           return null;
           
-        case 'requestPermission':
+        case 'session/request_permission':
           return await this.requestPermission(this.validateParams(requestPermissionRequestSchema, params));
           
-        case 'readTextFile':
+        case 'fs/read_text_file':
           return await this.readTextFile(this.validateParams(readTextFileRequestSchema, params));
           
-        case 'writeTextFile':
+        case 'fs/write_text_file':
           await this.writeTextFile(this.validateParams(writeTextFileRequestSchema, params));
           return null;
           
@@ -188,6 +190,8 @@ export class ClaudeACPAgent implements ACPClient {
       );
     }
 
+    // Store client capabilities for later use
+    this.clientCapabilities = params.clientCapabilities;
     this.initialized = true;
 
     return {
@@ -217,7 +221,8 @@ export class ClaudeACPAgent implements ACPClient {
       respectGitignore: this.config.respectGitignore,
       debug: this.config.debug,
       maxConcurrentSessions: this.config.maxSessions,
-      sessionTimeoutMs: this.config.sessionTimeoutMs
+      sessionTimeoutMs: this.config.sessionTimeoutMs,
+      mcpServers: params.mcpServers // Store MCP servers for potential future use
     };
 
     // Create Claude SDK instance
@@ -231,6 +236,11 @@ export class ClaudeACPAgent implements ACPClient {
       claudeSDK,
       this
     );
+    
+    // Log MCP servers configuration for transparency (future implementation)
+    if (params.mcpServers && params.mcpServers.length > 0 && this.config.debug) {
+      console.error(`MCP servers configured but not yet implemented: ${params.mcpServers.map(s => s.name).join(', ')}`);
+    }
 
     if (this.config.debug) {
       console.error(`Created session: ${sessionId} in ${params.cwd}`);
@@ -252,6 +262,7 @@ export class ClaudeACPAgent implements ACPClient {
 
     // Update session configuration
     session.config.cwd = params.cwd;
+    session.config.mcpServers = params.mcpServers; // Update MCP servers
     session.updateLastUsed();
 
     if (this.config.debug) {
@@ -281,18 +292,6 @@ export class ClaudeACPAgent implements ACPClient {
     try {
       // Convert prompt content to string for Claude SDK
       const promptText = this.contentBlocksToString(params.prompt);
-
-      // Send initial session update
-      await this.sessionUpdate({
-        sessionId: params.sessionId,
-        update: {
-          sessionUpdate: 'user_message_chunk',
-          content: {
-            type: 'text',
-            text: promptText
-          }
-        }
-      });
 
       // Get pooled Claude SDK for better performance
       const pooledSDK = this.getPooledClaudeSDK(session.id);
@@ -393,7 +392,7 @@ export class ClaudeACPAgent implements ACPClient {
   // ACPClient interface implementation
 
   async sessionUpdate(params: { sessionId: string; update: SessionUpdate }): Promise<void> {
-    await this.connection.sendNotification('sessionUpdate', {
+    await this.connection.sendNotification('session/update', {
       sessionId: params.sessionId,
       update: params.update
     });
@@ -404,7 +403,7 @@ export class ClaudeACPAgent implements ACPClient {
     toolCall: ToolCallUpdate;
     options: PermissionOption[];
   }): Promise<{ outcome: { outcome: string; optionId?: string } }> {
-    return await this.connection.sendRequest('requestPermission', params);
+    return await this.connection.sendRequest('session/request_permission', params);
   }
 
   async readTextFile(params: {
@@ -413,6 +412,11 @@ export class ClaudeACPAgent implements ACPClient {
     line?: number | null;
     limit?: number | null;
   }): Promise<{ content: string }> {
+    // Check client capability
+    if (this.clientCapabilities?.fs?.readTextFile === false) {
+      throw this.createInvalidRequestError('Client does not support readTextFile capability');
+    }
+    
     // Convert null to undefined for the request
     const requestParams = {
       sessionId: params.sessionId,
@@ -420,7 +424,7 @@ export class ClaudeACPAgent implements ACPClient {
       line: params.line ?? undefined,
       limit: params.limit ?? undefined
     };
-    return await this.connection.sendRequest('readTextFile', requestParams);
+    return await this.connection.sendRequest('fs/read_text_file', requestParams);
   }
 
   async writeTextFile(params: {
@@ -428,7 +432,12 @@ export class ClaudeACPAgent implements ACPClient {
     path: string;
     content: string;
   }): Promise<void> {
-    await this.connection.sendRequest('writeTextFile', params);
+    // Check client capability
+    if (this.clientCapabilities?.fs?.writeTextFile === false) {
+      throw this.createInvalidRequestError('Client does not support writeTextFile capability');
+    }
+    
+    await this.connection.sendRequest('fs/write_text_file', params);
   }
 
   /**

@@ -500,3 +500,14 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guidelines.
 - **Issues**: [GitHub Issues](https://github.com/carlrannaberg/cc-acp/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/carlrannaberg/cc-acp/discussions)
 - **Security**: Report security issues privately via GitHub Security tab
+
+## Git Commit Conventions
+Based on analysis of this project's git history:
+- **Format**: Conventional commits with `type(scope): description`
+- **Types**: `feat` (new features), `refactor` (code improvements), `fix` (bug fixes), `docs` (documentation)
+- **Scope**: Optional, use when changes are specific to a component (e.g., `specs`, `agent`, `protocol`)
+- **Description**: Lowercase, imperative mood, no period
+- **Examples**:
+  - `feat: implement complete Claude Code ACP agent for Zed Editor`
+  - `feat(specs): create realistic ACP agent spec based on Gemini CLI learnings`
+  - `refactor(specs): simplify ACP agent spec to focused MVP`

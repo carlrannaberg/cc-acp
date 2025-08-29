@@ -191,8 +191,10 @@ export class Session {
   // Backpressure handling for streams
   private streamBuffer: unknown[] = [];
   private readonly STREAM_BUFFER_SIZE = 100;
+  private readonly MAX_BUFFER_SIZE = 1000; // Hard limit to prevent memory leaks
   private readonly STREAM_FLUSH_INTERVAL = 100; // ms
   private streamFlushTimer: NodeJS.Timeout | null = null;
+  private bufferOverflowWarning = false;
   
   // Memory management
   private readonly MAX_CONVERSATION_HISTORY = 50;
@@ -214,11 +216,13 @@ export class Session {
     this.fileSystem = new ACPFileSystem(
       this.acpClient,
       this.id,
-      options.fileSystemService
+      options.fileSystemService,
+      this.config.cwd // Pass session CWD for path normalization
     );
     
     // Initialize file resolver for smart content resolution
-    this.fileResolver = new FileResolver(this.config, options.fileSystemService);
+    // FIXED: Use session-bound fileSystem instead of options.fileSystemService
+    this.fileResolver = new FileResolver(this.config, this.fileSystem);
   }
 
   /**
@@ -508,9 +512,19 @@ export class Session {
   }
   
   /**
-   * Buffer stream updates for backpressure handling
+   * Buffer stream updates for backpressure handling with overflow protection
    */
   private async bufferStreamUpdate(update: Parameters<ACPClient['sessionUpdate']>[0]): Promise<void> {
+    // Check for buffer overflow to prevent memory exhaustion
+    if (this.streamBuffer.length >= this.MAX_BUFFER_SIZE) {
+      if (!this.bufferOverflowWarning) {
+        console.error(`Stream buffer overflow in session ${this.id}, dropping oldest messages`);
+        this.bufferOverflowWarning = true;
+      }
+      // Drop oldest messages to prevent memory exhaustion
+      this.streamBuffer.splice(0, this.streamBuffer.length - this.STREAM_BUFFER_SIZE);
+    }
+    
     this.streamBuffer.push(update);
     
     if (this.streamBuffer.length >= this.STREAM_BUFFER_SIZE) {
@@ -666,6 +680,9 @@ export class Session {
         agent.permissionManager.clearCache();
       }
       
+      // Reset stream buffer overflow warning
+      this.bufferOverflowWarning = false;
+      
       // Notify client of cleanup
       await this.acpClient.sessionUpdate({
         sessionId: this.id,
@@ -684,30 +701,66 @@ export class Session {
   }
 
   /**
-   * CRITICAL FIX: Recover from errors with comprehensive state management
+   * CRITICAL FIX: Recover from errors with comprehensive state management and health validation
    */
   private async recoverFromError(errorMessage: string): Promise<void> {
     try {
       // Perform state cleanup
       await this.cleanupErrorState(`Error recovery: ${errorMessage}`);
       
-      // Send error notification to client
+      // Validate session is still usable
+      const sessionHealthy = await this.validateSessionHealth();
+      
+      if (!sessionHealthy) {
+        // Session is corrupted, mark for disposal
+        this.disposed = true;
+        await this.acpClient.sessionUpdate({
+          sessionId: this.id,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: {
+              type: 'text',
+              text: `Session corrupted and needs restart: ${errorMessage}`
+            }
+          }
+        }).catch(() => {});
+        return;
+      }
+      
+      // Send recovery notification
       await this.acpClient.sessionUpdate({
         sessionId: this.id,
         update: {
           sessionUpdate: 'agent_message_chunk',
           content: {
             type: 'text',
-            text: `Error processing prompt: ${errorMessage}. Session recovered.`
+            text: `Error recovered: ${errorMessage}. Session continues normally.`
           }
         }
       }).catch(() => {}); // Ignore session update errors during recovery
       
       // Reset session state for next operation
       this.pendingPrompt = null;
+      this.bufferOverflowWarning = false;
       
     } catch (recoveryError) {
-      console.error(`Error during recovery for session ${this.id}:`, recoveryError);
+      console.error(`Fatal error during recovery for session ${this.id}:`, recoveryError);
+      this.disposed = true;
+    }
+  }
+  
+  /**
+   * Validate session health to determine if recovery is possible
+   */
+  private async validateSessionHealth(): Promise<boolean> {
+    try {
+      // Check critical components
+      return !this.disposed && 
+             this.fileSystem !== null &&
+             this.conversationHistory.length < this.MAX_CONVERSATION_HISTORY &&
+             process.memoryUsage().heapUsed / (1024 * 1024) < this.MAX_MEMORY_MB;
+    } catch {
+      return false;
     }
   }
 

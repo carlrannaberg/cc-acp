@@ -190,7 +190,7 @@ For developers building extensions or integrating with this agent, see [API.md](
 
 ## License
 
-ISC License - see package.json for details.
+MIT License - see package.json for details.
 
 ## Support
 

@@ -330,6 +330,11 @@ export class TimeoutHandler {
 
 export class ErrorHandler {
   static handle(error: unknown): ACPError {
+    // If it's already an ACPError, return it as-is
+    if (isACPError(error)) {
+      return error;
+    }
+    
     if (error instanceof z.ZodError) {
       return {
         code: -32602, // Invalid params
