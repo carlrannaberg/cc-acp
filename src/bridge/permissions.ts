@@ -233,40 +233,48 @@ export class PermissionManager {
    * Convert ACP response to decision object
    */
   private processResponse(response: PermissionResponse): PermissionDecision {
-    const { outcome, optionId } = response.outcome;
-    
-    let allowed = false;
-    let scope: 'once' | 'always' | 'never' = 'never';
+    const { outcome } = response.outcome;
 
-    if (outcome === 'allowed') {
-      allowed = true;
-      scope = 'once';
+    // Treat cancelled as a deny-once for safety
+    if (outcome === 'cancelled') {
+      return {
+        allowed: false,
+        scope: 'once',
+        cacheKey: this.sessionContext
+      };
     }
 
-    // Process specific option IDs
-    if (optionId) {
-      switch (optionId) {
-        case 'allow_once':
-          allowed = true;
-          scope = 'once';
-          break;
-        case 'allow_all_edits':
-        case 'allow_command':
-        case 'allow_all_reads':
-        case 'allow_all_search':
-          allowed = true;
-          scope = 'always';
-          break;
-        case 'deny_once':
-          allowed = false;
-          scope = 'once';
-          break;
-        case 'deny_all_edits':
-        case 'deny_command':
-          allowed = false;
-          scope = 'never';
-          break;
-      }
+    // Derive decision strictly from selected optionId
+    const optionId = response.outcome.optionId;
+    let allowed = false;
+    let scope: 'once' | 'always' | 'never' = 'once';
+
+    switch (optionId) {
+      case 'allow_once':
+        allowed = true;
+        scope = 'once';
+        break;
+      case 'allow_all_edits':
+      case 'allow_command':
+      case 'allow_all_reads':
+      case 'allow_all_search':
+        allowed = true;
+        scope = 'always';
+        break;
+      case 'deny_once':
+        allowed = false;
+        scope = 'once';
+        break;
+      case 'deny_all_edits':
+      case 'deny_command':
+        allowed = false;
+        scope = 'never';
+        break;
+      default:
+        // Unknown option: deny-once by default
+        allowed = false;
+        scope = 'once';
+        break;
     }
 
     return {

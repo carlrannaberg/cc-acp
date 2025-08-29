@@ -394,18 +394,18 @@ Permission-related data structures:
 
 ```typescript
 interface PermissionOption {
-  id: string;
-  label: string;
-  description?: string;
+  optionId: string;
+  name: string;
+  kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
 }
 
 interface PermissionDecision {
   allowed: boolean;
-  reason?: string;
-  optionId?: string;
+  scope: 'once' | 'always' | 'never';
+  cacheKey?: string;
 }
 
-type PermissionOutcome = 'approved' | 'denied' | 'cancelled';
+type PermissionOutcome = 'selected' | 'cancelled';
 ```
 
 ## Error Handling

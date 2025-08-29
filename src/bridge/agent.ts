@@ -4,6 +4,9 @@ import { Connection } from '../protocol/connection.js';
 import ACPFileSystem from '../files/filesystem.js';
 import { SessionManager, Session } from './session.js';
 import { PermissionManager } from './permissions.js';
+
+// Global flag to prevent multiple process error handler registrations
+let globalErrorHandlersRegistered = false;
 import { 
   InitializeRequest, 
   InitializeResponse,
@@ -574,17 +577,20 @@ export class ClaudeACPAgent implements ACPClient {
   // This method is no longer needed but kept for backward compatibility
 
   private setupErrorHandlers(): void {
-    process.on('uncaughtException', (error) => {
-      this.performanceMetrics.errorCount++;
-      console.error('Uncaught exception:', error);
-      process.exit(1);
-    });
+    // Only register global process handlers once per process
+    if (!globalErrorHandlersRegistered) {
+      process.on('uncaughtException', (error) => {
+        console.error('Uncaught exception:', error);
+        process.exit(1);
+      });
 
-    process.on('unhandledRejection', (reason) => {
-      this.performanceMetrics.errorCount++;
-      console.error('Unhandled rejection:', reason);
-      process.exit(1);
-    });
+      process.on('unhandledRejection', (reason) => {
+        console.error('Unhandled rejection:', reason);
+        process.exit(1);
+      });
+      
+      globalErrorHandlersRegistered = true;
+    }
   }
   
   /**
