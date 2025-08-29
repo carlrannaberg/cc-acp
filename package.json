@@ -1,8 +1,11 @@
 {
-  "name": "cc-acp",
+  "name": "claude-code-acp",
   "version": "1.0.0",
-  "description": "A new repository created with GitHub CLI.",
-  "main": "index.js",
+  "description": "Claude Code agent for Zed Editor via ACP",
+  "main": "dist/index.js",
+  "bin": {
+    "claude-code-acp": "./dist/index.js"
+  },
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/index.js",
     "dev": "esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/index.js --watch",
@@ -24,11 +27,17 @@
   "dependencies": {
     "@anthropic-ai/claude-code": "^1.0.96",
     "@zed-industries/agent-client-protocol": "^0.1.2",
+    "fast-glob": "^3.3.3",
+    "glob": "^11.0.3",
+    "ignore": "^7.0.5",
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^18.19.123",
     "esbuild": "^0.25.9",
+    "jest": "^30.1.1",
+    "ts-jest": "^29.4.1",
     "typescript": "^5.9.2"
   }
 }
