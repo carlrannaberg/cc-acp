@@ -1,0 +1,57 @@
+# Source files
+src/
+tests/
+*.ts
+!dist/*.d.ts
+
+# Config files
+tsconfig.json
+jest.config.js
+.eslintrc.js
+eslint.config.js
+
+# Development files
+*.log
+.env
+.env.*
+.vscode/
+.idea/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Documentation source
+docs/
+specs/
+*.md
+!README.md
+
+# Build artifacts
+coverage/
+*.map
+
+# Test files
+__tests__/
+*.test.ts
+*.spec.ts
+
+# Development dependencies
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git files
+.git/
+.gitignore
+
+# Simple task master
+.simple-task-master/
+
+# Performance and architecture docs
+PERFORMANCE_OPTIMIZATIONS.md
+ARCHITECTURE.md
+CONTRIBUTING.md
+API.md

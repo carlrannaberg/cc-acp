@@ -53,9 +53,11 @@ import { z } from 'zod';
 
 // Import the real Claude SDK from @anthropic-ai/claude-code
 import { query as claudeQuery, type SDKMessage, type Options } from '@anthropic-ai/claude-code';
+import { LRUCache } from 'lru-cache';
+import { globalPerformanceMonitor, globalMemoryManager } from '../utils/performance.js';
 
 /**
- * Main ACP Agent implementation
+ * Main ACP Agent implementation with performance optimizations
  * Handles protocol lifecycle and manages multiple sessions
  */
 export class ClaudeACPAgent implements ACPClient {
@@ -65,6 +67,22 @@ export class ClaudeACPAgent implements ACPClient {
   private authMethods: Array<{ id: string; name: string; description?: string }> = [];
   private diskFileSystem: FileSystemService;
   public permissionManager: PermissionManager; // Make public for Session access
+  
+  // Connection pooling for Claude SDK
+  private claudeSDKPool = new Map<string, { sdk: ClaudeSDK; lastUsed: number; inUse: boolean }>();
+  private readonly MAX_POOL_SIZE = 5;
+  private readonly POOL_CLEANUP_INTERVAL = 300000; // 5 minutes
+  private poolCleanupTimer!: NodeJS.Timeout;
+  
+  // Performance monitoring
+  private performanceMetrics = {
+    requestCount: 0,
+    totalResponseTime: 0,
+    errorCount: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    startTime: Date.now()
+  };
   
   // Configuration from environment
   private readonly config: AgentConfig = {
@@ -106,6 +124,7 @@ export class ClaudeACPAgent implements ACPClient {
 
     this.setupAuthMethods();
     this.setupErrorHandlers();
+    this.setupPerformanceMonitoring();
   }
 
   /**
@@ -243,10 +262,13 @@ export class ClaudeACPAgent implements ACPClient {
   }
 
   /**
-   * Handle prompt request
+   * Handle prompt request with performance monitoring
    */
   async prompt(params: PromptRequest): Promise<PromptResponse> {
     this.ensureInitialized();
+    
+    const requestStart = Date.now();
+    this.performanceMetrics.requestCount++;
     
     const session = await this.getSession(params.sessionId);
     
@@ -257,7 +279,6 @@ export class ClaudeACPAgent implements ACPClient {
     const abortController = session.getAbortController();
 
     try {
-
       // Convert prompt content to string for Claude SDK
       const promptText = this.contentBlocksToString(params.prompt);
 
@@ -273,8 +294,11 @@ export class ClaudeACPAgent implements ACPClient {
         }
       });
 
+      // Get pooled Claude SDK for better performance
+      const pooledSDK = this.getPooledClaudeSDK(session.id);
+      
       // Query Claude SDK
-      const response = await session.claudeSDK.query({
+      const response = await pooledSDK.query({
         prompt: promptText,
         options: {
           abortController: abortController,
@@ -291,14 +315,29 @@ export class ClaudeACPAgent implements ACPClient {
       // Stream response chunks
       for await (const message of response) {
         if (abortController.signal.aborted) {
+          this.releasePooledSDK(session.id);
           return { stopReason: 'cancelled' };
         }
 
         await this.sendClaudeMessage(session.id, message);
       }
+      
+      // Release SDK back to pool
+      this.releasePooledSDK(session.id);
+      
+      // Record performance metrics
+      const responseTime = Date.now() - requestStart;
+      this.performanceMetrics.totalResponseTime += responseTime;
+      
+      if (this.config.debug && responseTime > 100) {
+        console.error(`Slow request detected: ${responseTime}ms for session ${params.sessionId}`);
+      }
 
       return { stopReason: 'end_turn' };
     } catch (error) {
+      this.performanceMetrics.errorCount++;
+      this.releasePooledSDK(session.id);
+      
       if (abortController.signal.aborted) {
         return { stopReason: 'cancelled' };
       }
@@ -406,6 +445,14 @@ export class ClaudeACPAgent implements ACPClient {
    * Stop the agent
    */
   async stop(): Promise<void> {
+    // Clear timers
+    if (this.poolCleanupTimer) {
+      clearInterval(this.poolCleanupTimer);
+    }
+    
+    // Clear SDK pool
+    this.claudeSDKPool.clear();
+    
     // Cancel all active sessions
     await this.sessionManager.destroyAllSessions();
     this.sessionManager.dispose();
@@ -414,6 +461,7 @@ export class ClaudeACPAgent implements ACPClient {
     
     if (this.config.debug) {
       console.error('Claude ACP Agent stopped');
+      console.error('Performance metrics:', this.getPerformanceReport());
     }
   }
 
@@ -489,14 +537,115 @@ export class ClaudeACPAgent implements ACPClient {
 
   private setupErrorHandlers(): void {
     process.on('uncaughtException', (error) => {
+      this.performanceMetrics.errorCount++;
       console.error('Uncaught exception:', error);
       process.exit(1);
     });
 
     process.on('unhandledRejection', (reason) => {
+      this.performanceMetrics.errorCount++;
       console.error('Unhandled rejection:', reason);
       process.exit(1);
     });
+  }
+  
+  /**
+   * Setup performance monitoring and cleanup
+   */
+  private setupPerformanceMonitoring(): void {
+    // SDK pool cleanup
+    this.poolCleanupTimer = setInterval(() => {
+      this.cleanupSDKPool();
+    }, this.POOL_CLEANUP_INTERVAL);
+    
+    // Performance reporting
+    if (this.config.debug) {
+      setInterval(() => {
+        console.error('Performance metrics:', this.getPerformanceReport());
+      }, 60000); // Every minute
+    }
+  }
+  
+  /**
+   * Clean up unused SDK instances
+   */
+  private cleanupSDKPool(): void {
+    const now = Date.now();
+    const expiredThreshold = 600000; // 10 minutes
+    
+    for (const [key, poolItem] of this.claudeSDKPool) {
+      if (!poolItem.inUse && (now - poolItem.lastUsed) > expiredThreshold) {
+        this.claudeSDKPool.delete(key);
+      }
+    }
+  }
+  
+  /**
+   * Get or create SDK from pool
+   */
+  private getPooledClaudeSDK(conversationId?: string): ClaudeSDK {
+    const poolKey = conversationId || 'default';
+    const poolItem = this.claudeSDKPool.get(poolKey);
+    
+    if (poolItem && !poolItem.inUse) {
+      poolItem.inUse = true;
+      poolItem.lastUsed = Date.now();
+      this.performanceMetrics.cacheHits++;
+      return poolItem.sdk;
+    }
+    
+    // Create new SDK if pool not full
+    if (this.claudeSDKPool.size < this.MAX_POOL_SIZE) {
+      const sdk = this.createClaudeSDK();
+      this.claudeSDKPool.set(poolKey, {
+        sdk,
+        lastUsed: Date.now(),
+        inUse: true
+      });
+      this.performanceMetrics.cacheMisses++;
+      return sdk;
+    }
+    
+    // Fallback to creating new SDK
+    this.performanceMetrics.cacheMisses++;
+    return this.createClaudeSDK();
+  }
+  
+  /**
+   * Release SDK back to pool
+   */
+  private releasePooledSDK(conversationId?: string): void {
+    const poolKey = conversationId || 'default';
+    const poolItem = this.claudeSDKPool.get(poolKey);
+    if (poolItem) {
+      poolItem.inUse = false;
+      poolItem.lastUsed = Date.now();
+    }
+  }
+  
+  /**
+   * Get performance report
+   */
+  private getPerformanceReport(): Record<string, unknown> {
+    const uptime = Date.now() - this.performanceMetrics.startTime;
+    const avgResponseTime = this.performanceMetrics.requestCount > 0 
+      ? this.performanceMetrics.totalResponseTime / this.performanceMetrics.requestCount 
+      : 0;
+    
+    const cacheHitRate = (this.performanceMetrics.cacheHits + this.performanceMetrics.cacheMisses) > 0
+      ? (this.performanceMetrics.cacheHits / (this.performanceMetrics.cacheHits + this.performanceMetrics.cacheMisses)) * 100
+      : 0;
+    
+    return {
+      uptime: `${Math.round(uptime / 1000)}s`,
+      activeSessions: this.sessionManager.getSessionCount(),
+      totalRequests: this.performanceMetrics.requestCount,
+      avgResponseTime: `${avgResponseTime.toFixed(1)}ms`,
+      errorCount: this.performanceMetrics.errorCount,
+      cacheHitRate: `${cacheHitRate.toFixed(1)}%`,
+      sdkPoolSize: this.claudeSDKPool.size,
+      memoryUsage: `${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1)}MB`
+    };
   }
 
   private createWritableStream(writable: Writable): WritableStream<Uint8Array> {

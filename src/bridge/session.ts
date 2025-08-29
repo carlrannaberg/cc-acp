@@ -16,6 +16,7 @@ import {
 } from '../utils/types.js';
 import { PromptRequest, PromptResponse } from '../protocol/schemas.js';
 import { PermissionManager } from './permissions.js';
+import { StreamBuffer, globalMemoryManager } from '../utils/performance.js';
 
 // Interface for agent with permission manager access
 interface ACPClientWithPermissions extends ACPClient {
@@ -23,13 +24,20 @@ interface ACPClientWithPermissions extends ACPClient {
 }
 
 /**
- * Session management for ACP connections
+ * Session management for ACP connections with performance monitoring
  */
 export class SessionManager {
   private sessions = new Map<string, Session>();
   private maxSessions: number;
   private sessionTimeoutMs: number;
   private cleanupInterval: NodeJS.Timeout;
+  
+  // Performance monitoring
+  private memoryStats = {
+    maxMemoryMB: 512,
+    lastMemoryCheck: Date.now(),
+    memoryCheckInterval: 30000 // 30 seconds
+  };
 
   constructor(options: SessionManagerOptions = {}) {
     this.maxSessions = options.maxSessions ?? 10;
@@ -38,6 +46,7 @@ export class SessionManager {
     // Set up periodic cleanup of expired sessions
     this.cleanupInterval = setInterval(() => {
       this.cleanupExpiredSessions();
+      this.checkMemoryUsage();
     }, 300000); // 5 minutes
   }
 
@@ -114,10 +123,53 @@ export class SessionManager {
       }
     }
   }
+  
+  /**
+   * Monitor memory usage and trigger cleanup if needed
+   */
+  private checkMemoryUsage(): void {
+    const now = Date.now();
+    if (now - this.memoryStats.lastMemoryCheck < this.memoryStats.memoryCheckInterval) {
+      return;
+    }
+    
+    this.memoryStats.lastMemoryCheck = now;
+    
+    const memoryUsage = process.memoryUsage();
+    const memoryUsedMB = memoryUsage.heapUsed / (1024 * 1024);
+    
+    if (memoryUsedMB > this.memoryStats.maxMemoryMB) {
+      console.warn(`High memory usage: ${memoryUsedMB.toFixed(1)}MB, triggering cleanup`);
+      this.performMemoryCleanup();
+    }
+  }
+  
+  /**
+   * Aggressive memory cleanup when usage is high
+   */
+  private performMemoryCleanup(): void {
+    // Clear oldest sessions first
+    const sessionsSorted = Array.from(this.sessions.entries())
+      .sort(([, a], [, b]) => a.lastUsed.getTime() - b.lastUsed.getTime());
+    
+    // Remove up to half of the sessions if memory is critical
+    const sessionsToRemove = sessionsSorted.slice(0, Math.ceil(sessionsSorted.length / 2));
+    
+    for (const [sessionId] of sessionsToRemove) {
+      this.destroySession(sessionId).catch(error => {
+        console.error(`Failed to cleanup session during memory cleanup ${sessionId}:`, error);
+      });
+    }
+    
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
+    }
+  }
 }
 
 /**
- * Individual session handling and state management
+ * Individual session handling and state management with backpressure and memory optimization
  */
 export class Session {
   public readonly config: Config;
@@ -126,7 +178,7 @@ export class Session {
   
   private acpClient: ACPClient;
   private createdAt: Date;
-  private lastUsed: Date;
+  public lastUsed: Date; // Make public for session manager access
   private sessionTimeoutMs: number;
   private abortController?: AbortController;
   private disposed = false;
@@ -135,6 +187,16 @@ export class Session {
   private conversationHistory: Message[] = [];
   private pendingPrompt: AbortController | null = null;
   private fileResolver: FileResolver;
+  
+  // Backpressure handling for streams
+  private streamBuffer: unknown[] = [];
+  private readonly STREAM_BUFFER_SIZE = 100;
+  private readonly STREAM_FLUSH_INTERVAL = 100; // ms
+  private streamFlushTimer: NodeJS.Timeout | null = null;
+  
+  // Memory management
+  private readonly MAX_CONVERSATION_HISTORY = 50;
+  private readonly MAX_MEMORY_MB = 128; // Per session limit
 
   constructor(
     public readonly id: string,
@@ -242,6 +304,13 @@ export class Session {
       throw error;
     } finally {
       this.pendingPrompt = null;
+      
+      // Memory management after each prompt
+      this.manageConversationMemory();
+      this.checkSessionMemory();
+      
+      // Flush any remaining stream updates
+      await this.flushStreamBuffer();
     }
   }
 
@@ -390,7 +459,7 @@ export class Session {
   }
 
   /**
-   * Process streaming chunks and send updates to client
+   * Process streaming chunks with backpressure handling
    * CRITICAL FIX: Handle both string and ContentBlock[] content formats
    */
   private async processChunk(chunk: ClaudeMessage): Promise<{ contentBlock?: ContentBlock; content?: string }> {
@@ -402,8 +471,8 @@ export class Session {
           text: chunk.content
         };
         
-        // Send content update to client as agent message chunk
-        await this.acpClient.sessionUpdate({
+        // Use buffered sending for backpressure control
+        await this.bufferStreamUpdate({
           sessionId: this.id,
           update: {
             sessionUpdate: 'agent_message_chunk',
@@ -420,7 +489,7 @@ export class Session {
           text: `Error: ${chunk.error}`
         };
         
-        await this.acpClient.sessionUpdate({
+        await this.bufferStreamUpdate({
           sessionId: this.id,
           update: {
             sessionUpdate: 'agent_message_chunk',
@@ -435,6 +504,41 @@ export class Session {
     } catch (error) {
       console.error(`Error processing chunk in session ${this.id}:`, error);
       return {};
+    }
+  }
+  
+  /**
+   * Buffer stream updates for backpressure handling
+   */
+  private async bufferStreamUpdate(update: Parameters<ACPClient['sessionUpdate']>[0]): Promise<void> {
+    this.streamBuffer.push(update);
+    
+    if (this.streamBuffer.length >= this.STREAM_BUFFER_SIZE) {
+      await this.flushStreamBuffer();
+    } else if (!this.streamFlushTimer) {
+      this.streamFlushTimer = setTimeout(() => this.flushStreamBuffer(), this.STREAM_FLUSH_INTERVAL);
+    }
+  }
+  
+  /**
+   * Flush buffered stream updates
+   */
+  private async flushStreamBuffer(): Promise<void> {
+    if (this.streamFlushTimer) {
+      clearTimeout(this.streamFlushTimer);
+      this.streamFlushTimer = null;
+    }
+    
+    const updates = this.streamBuffer.splice(0) as Parameters<ACPClient['sessionUpdate']>[0][];
+    if (updates.length === 0) return;
+    
+    // Send all buffered updates
+    for (const update of updates) {
+      try {
+        await this.acpClient.sessionUpdate(update);
+      } catch (error) {
+        console.error(`Failed to send buffered update:`, error);
+      }
     }
   }
 
@@ -678,6 +782,37 @@ export class Session {
   clearHistory(): void {
     this.conversationHistory = [];
   }
+  
+  /**
+   * Manage conversation history size for memory efficiency
+   */
+  private manageConversationMemory(): void {
+    if (this.conversationHistory.length > this.MAX_CONVERSATION_HISTORY) {
+      // Keep only the most recent messages
+      const toKeep = Math.floor(this.MAX_CONVERSATION_HISTORY * 0.8);
+      this.conversationHistory = this.conversationHistory.slice(-toKeep);
+    }
+  }
+  
+  /**
+   * Check session memory usage
+   */
+  private checkSessionMemory(): void {
+    const memoryUsage = process.memoryUsage();
+    const sessionMemoryMB = memoryUsage.heapUsed / (1024 * 1024);
+    
+    if (sessionMemoryMB > this.MAX_MEMORY_MB) {
+      // Aggressive cleanup
+      this.conversationHistory = this.conversationHistory.slice(-10);
+      
+      // Clear file resolver cache
+      this.fileResolver.clearCache();
+      
+      if (global.gc) {
+        global.gc();
+      }
+    }
+  }
 
   toJSON() {
     return {
@@ -699,9 +834,19 @@ export class Session {
     this.disposed = true;
     this.cancel();
     
-    // Clear caches
+    // Flush any pending stream updates
+    await this.flushStreamBuffer();
+    
+    // Clear timers
+    if (this.streamFlushTimer) {
+      clearTimeout(this.streamFlushTimer);
+      this.streamFlushTimer = null;
+    }
+    
+    // Clear caches and memory
     this.conversationHistory = [];
-    // Permission cache is now managed by PermissionManager
+    this.streamBuffer = [];
+    this.fileResolver.clearCache();
     
     // Clean up resources
     if (this.fileSystem && typeof this.fileSystem.dispose === 'function') {

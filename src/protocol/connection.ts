@@ -60,6 +60,12 @@ export class Connection {
   private writeQueue: Promise<void> = Promise.resolve();
   private closed = false;
   private options: Required<ConnectionOptions>;
+  
+  // Message batching for performance
+  private messageQueue: unknown[] = [];
+  private batchTimer: NodeJS.Timeout | null = null;
+  private readonly BATCH_SIZE = 10;
+  private readonly BATCH_DELAY = 50; // ms
 
   constructor(
     private handler: MethodHandler,
@@ -278,19 +284,39 @@ export class Connection {
     });
   }
 
-  // Queued writes to prevent message interleaving
+  // Queued writes with batching for performance
   private async sendMessage(message: unknown): Promise<void> {
     if (this.closed) {
       throw new Error('Connection is closed');
     }
 
+    this.messageQueue.push(message);
+    
+    if (this.messageQueue.length >= this.BATCH_SIZE) {
+      await this.flushMessageQueue();
+    } else if (!this.batchTimer) {
+      this.batchTimer = setTimeout(() => this.flushMessageQueue(), this.BATCH_DELAY);
+    }
+  }
+  
+  private async flushMessageQueue(): Promise<void> {
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
+    }
+    
+    const messages = this.messageQueue.splice(0);
+    if (messages.length === 0) return;
+    
     this.writeQueue = this.writeQueue.then(async () => {
       const writer = this.input.getWriter();
       try {
-        const data = JSON.stringify(message) + '\n';
-        await writer.write(new TextEncoder().encode(data));
-        
-        this.debugLog('Sent message:', message);
+        // Send all messages in batch
+        for (const msg of messages) {
+          const data = JSON.stringify(msg) + '\n';
+          await writer.write(new TextEncoder().encode(data));
+          this.debugLog('Sent message:', msg);
+        }
       } finally {
         writer.releaseLock();
       }
@@ -361,6 +387,9 @@ export class Connection {
     }
 
     this.closed = true;
+
+    // Flush any remaining batched messages
+    await this.flushMessageQueue();
 
     // Cancel all pending requests
     for (const [id, pending] of this.pendingResponses) {

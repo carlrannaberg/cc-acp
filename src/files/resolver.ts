@@ -2,6 +2,7 @@ import { glob } from 'glob';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import ignore from 'ignore';
+import { LRUCache } from 'lru-cache';
 import { Config, FileSystemService, ResolvedContent, ContentBlock, PathUtils } from '../utils/types.js';
 import { ErrorHandler } from '../utils/errors.js';
 
@@ -10,13 +11,29 @@ import { ErrorHandler } from '../utils/errors.js';
  * Provides intelligent file handling with fallback strategies
  */
 export class FileResolver {
+  // LRU cache for file resolution performance
+  private cache = new LRUCache<string, ResolvedContent>({
+    max: 100,
+    ttl: 1000 * 60 * 5 // 5 minutes
+  });
+  
+  // Cache for path resolution
+  private pathCache = new LRUCache<string, string>({
+    max: 200,
+    ttl: 1000 * 60 * 10 // 10 minutes
+  });
+  
+  // Cache for gitignore patterns
+  private gitignoreCache: { patterns: string[]; timestamp: number } | null = null;
+  private readonly GITIGNORE_CACHE_TTL = 1000 * 60 * 5; // 5 minutes
+  
   constructor(
     private config: Config,
     private fileSystem: FileSystemService
   ) {}
 
   /**
-   * Resolve content blocks containing file references
+   * Resolve content blocks containing file references with caching
    */
   async resolvePrompt(
     content: ContentBlock[],
@@ -32,16 +49,28 @@ export class FileResolver {
       if (block.type === 'resource_link' && block.uri.startsWith('file://')) {
         const filePath = block.uri.slice(7); // Remove file://
         
+        // Check cache first
+        const cacheKey = `file:${filePath}`;
+        const cached = this.cache.get(cacheKey);
+        if (cached && cached.type !== 'error') {
+          resolved.push(cached);
+          continue;
+        }
+        
         try {
           // Try direct file access first
           const resolvedPath = await this.resolvePath(filePath, signal);
           const fileContent = await this.safeReadFile(resolvedPath);
           
-          resolved.push({
+          const result: ResolvedContent = {
             type: 'file',
             path: resolvedPath,
             content: fileContent
-          });
+          };
+          
+          // Cache successful resolution
+          this.cache.set(cacheKey, result);
+          resolved.push(result);
         } catch (error) {
           const acpError = ErrorHandler.handle(error);
           
@@ -54,32 +83,39 @@ export class FileResolver {
               const bestMatch = this.selectBestMatch(filePath, matches);
               try {
                 const fileContent = await this.safeReadFile(bestMatch);
-                resolved.push({
+                const result: ResolvedContent = {
                   type: 'file',
                   path: bestMatch,
                   content: fileContent
-                });
+                };
+                
+                // Cache successful fallback resolution
+                this.cache.set(cacheKey, result);
+                resolved.push(result);
               } catch (readError) {
                 const readAcpError = ErrorHandler.handle(readError);
-                resolved.push({
+                const errorResult: ResolvedContent = {
                   type: 'error',
                   message: `File found but not readable: ${bestMatch}. Error: ${readAcpError.message}`
-                });
+                };
+                resolved.push(errorResult);
               }
             } else {
               // No matches found - provide helpful error with suggestions
               const similar = await this.suggestSimilar(filePath);
-              resolved.push({
+              const errorResult: ResolvedContent = {
                 type: 'error',
                 message: `File not found: ${filePath}. Similar files: ${similar}`
-              });
+              };
+              resolved.push(errorResult);
             }
           } else {
             // Direct error without smart search
-            resolved.push({
+            const errorResult: ResolvedContent = {
               type: 'error',
               message: `File error: ${acpError.message}`
-            });
+            };
+            resolved.push(errorResult);
           }
         }
       } else {
@@ -94,7 +130,7 @@ export class FileResolver {
   }
 
   /**
-   * Resolve a file path to absolute location with validation
+   * Resolve a file path to absolute location with validation and caching
    * Supports AbortSignal for cancellation
    */
   async resolvePath(filePath: string, signal?: AbortSignal): Promise<string> {
@@ -104,6 +140,13 @@ export class FileResolver {
     
     if (!filePath) {
       throw new Error('File path is required');
+    }
+
+    // Check path cache first
+    const pathCacheKey = `path:${filePath}:${this.config.cwd}`;
+    const cachedPath = this.pathCache.get(pathCacheKey);
+    if (cachedPath) {
+      return cachedPath;
     }
 
     // Normalize to absolute path
@@ -122,12 +165,17 @@ export class FileResolver {
     try {
       const stats = await fs.stat(normalizedPath);
       
-      // CRITICAL FIX: If it's a directory, expand to glob pattern as required
+      let resolvedPath: string;
+      // If it's a directory, expand to glob pattern as required
       if (stats.isDirectory()) {
-        return `${normalizedPath}/**/*`;
+        resolvedPath = `${normalizedPath}/**/*`;
+      } else {
+        resolvedPath = normalizedPath;
       }
       
-      return normalizedPath;
+      // Cache successful resolution
+      this.pathCache.set(pathCacheKey, resolvedPath);
+      return resolvedPath;
     } catch (error) {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         const acpError = ErrorHandler.createACPError(-32001, `File not found: ${filePath}`, { path: filePath });
@@ -392,9 +440,17 @@ export class FileResolver {
   }
 
   /**
-   * Parse .gitignore file and return patterns
+   * Parse .gitignore file and return patterns with caching
    */
   private async getGitignorePatterns(): Promise<string[]> {
+    const now = Date.now();
+    
+    // Check cache first
+    if (this.gitignoreCache && 
+        (now - this.gitignoreCache.timestamp) < this.GITIGNORE_CACHE_TTL) {
+      return this.gitignoreCache.patterns;
+    }
+    
     try {
       const gitignorePath = path.join(this.config.cwd, '.gitignore');
       const gitignoreContent = await fs.readFile(gitignorePath, 'utf-8');
@@ -402,15 +458,31 @@ export class FileResolver {
       const ig = ignore().add(gitignoreContent);
       
       // Convert ignore patterns to glob-compatible patterns
-      return gitignoreContent
+      const patterns = gitignoreContent
         .split('\n')
         .map(line => line.trim())
         .filter(line => line && !line.startsWith('#'))
         .map(line => line.startsWith('/') ? line.slice(1) : `**/${line}`)
         .concat(['node_modules/**', '.git/**']); // Always ignore these
+      
+      // Cache the result
+      this.gitignoreCache = {
+        patterns,
+        timestamp: now
+      };
+      
+      return patterns;
     } catch {
       // Return default ignores if .gitignore doesn't exist
-      return ['node_modules/**', '.git/**', '.DS_Store'];
+      const defaultPatterns = ['node_modules/**', '.git/**', '.DS_Store'];
+      
+      // Cache the default result too
+      this.gitignoreCache = {
+        patterns: defaultPatterns,
+        timestamp: now
+      };
+      
+      return defaultPatterns;
     }
   }
 
@@ -425,6 +497,32 @@ export class FileResolver {
     if (stats.isDirectory()) return PathType.DIRECTORY;
     if (stats.isSymbolicLink()) return PathType.SYMLINK;
     return PathType.UNKNOWN;
+  }
+
+  /**
+   * Clear all caches (useful for memory management)
+   */
+  clearCache(): void {
+    this.cache.clear();
+    this.pathCache.clear();
+    this.gitignoreCache = null;
+  }
+  
+  /**
+   * Get cache statistics for monitoring
+   */
+  getCacheStats(): { fileCache: { size: number; max: number; hitRate: number }; pathCache: { size: number; max: number } } {
+    return {
+      fileCache: {
+        size: this.cache.size,
+        max: this.cache.max,
+        hitRate: this.cache.calculatedSize > 0 ? (this.cache.size / this.cache.calculatedSize) : 0
+      },
+      pathCache: {
+        size: this.pathCache.size,
+        max: this.pathCache.max
+      }
+    };
   }
 }
 
