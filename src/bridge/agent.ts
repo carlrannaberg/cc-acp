@@ -1033,20 +1033,38 @@ export class ClaudeACPAgent implements ACPClient {
           if (options.options.allowedTools && options.options.allowedTools.length > 0) {
             claudeOptions.allowedTools = options.options.allowedTools;
           }
-          // Optional SDK options via env-configured agent settings
+          // Apply SDK options from environment configuration
           const cfg = self.config;
-          if (cfg.model) claudeOptions.model = cfg.model;
-          if (cfg.fallbackModel) claudeOptions.fallbackModel = cfg.fallbackModel;
-          if (cfg.customSystemPrompt) claudeOptions.customSystemPrompt = cfg.customSystemPrompt;
-          if (cfg.appendSystemPrompt) claudeOptions.appendSystemPrompt = cfg.appendSystemPrompt;
-          if (cfg.additionalDirectories) claudeOptions.additionalDirectories = cfg.additionalDirectories;
-          if (cfg.permissionMode) claudeOptions.permissionMode = cfg.permissionMode;
-          if (cfg.maxThinkingTokens !== undefined && !Number.isNaN(cfg.maxThinkingTokens)) claudeOptions.maxThinkingTokens = cfg.maxThinkingTokens;
+          const sdkConfigMapping: Array<[keyof AgentConfig, keyof ExtendedClaudeOptions, boolean?]> = [
+            ['model', 'model'],
+            ['fallbackModel', 'fallbackModel'],
+            ['customSystemPrompt', 'customSystemPrompt'],
+            ['appendSystemPrompt', 'appendSystemPrompt'],
+            ['additionalDirectories', 'additionalDirectories'],
+            ['permissionMode', 'permissionMode'],
+            ['disallowedTools', 'disallowedTools'],
+            ['strictMcpConfig', 'strictMcpConfig', true], // boolean flag
+          ];
+          
+          // Apply simple config mappings
+          for (const [configKey, sdkKey, isBooleanFlag] of sdkConfigMapping) {
+            const value = cfg[configKey];
+            if (value !== undefined) {
+              if (isBooleanFlag) {
+                (claudeOptions as Record<string, unknown>)[sdkKey] = true;
+              } else {
+                (claudeOptions as Record<string, unknown>)[sdkKey] = value;
+              }
+            }
+          }
+          
+          // Handle special cases
+          if (cfg.maxThinkingTokens !== undefined && !Number.isNaN(cfg.maxThinkingTokens)) {
+            claudeOptions.maxThinkingTokens = cfg.maxThinkingTokens;
+          }
           if (cfg.allowedTools && (!claudeOptions.allowedTools || claudeOptions.allowedTools.length === 0)) {
             claudeOptions.allowedTools = cfg.allowedTools;
           }
-          if (cfg.disallowedTools) claudeOptions.disallowedTools = cfg.disallowedTools;
-          if (cfg.strictMcpConfig) claudeOptions.strictMcpConfig = true;
           if (finalMaxTurns !== undefined && !Number.isNaN(finalMaxTurns)) {
             claudeOptions.maxTurns = finalMaxTurns;
           }
@@ -1091,22 +1109,26 @@ export class ClaudeACPAgent implements ACPClient {
               }
             } else if (message.type === 'user' && 'text' in message) {
               // Handle user message echoes (usually from system init)
-              const textMessage = message as unknown as { text: string };
-              yield {
-                type: 'assistant',
-                content: `Echo: ${textMessage.text}`
-              } as ClaudeMessage;
+              const text = (message as Record<string, unknown>).text;
+              if (typeof text === 'string') {
+                yield {
+                  type: 'assistant',
+                  content: `Echo: ${text}`
+                } as ClaudeMessage;
+              }
             } else if (message.type === 'system') {
               // Handle system messages from Claude Code SDK
               if ('subtype' in message && message.subtype === 'init') {
                 // Skip init message, but log for debugging
                 console.debug('[ACP] Received Claude Code init message');
               } else if ('text' in message) {
-                const textMessage = message as unknown as { text: string };
-                yield {
-                  type: 'assistant',
-                  content: textMessage.text
-                } as ClaudeMessage;
+                const text = (message as Record<string, unknown>).text;
+                if (typeof text === 'string') {
+                  yield {
+                    type: 'assistant',
+                    content: text
+                  } as ClaudeMessage;
+                }
               }
             } else if (message.type === 'result') {
               // Prevent duplicate content: only surface explicit error subtypes; ignore normal results
@@ -1122,17 +1144,21 @@ export class ClaudeACPAgent implements ACPClient {
               // Handle any other message types by trying to extract text content
               console.debug('[ACP] Unknown message type, attempting to extract text:', message.type);
               if ('text' in message) {
-                const textMessage = message as unknown as { text: string };
-                yield {
-                  type: 'assistant', 
-                  content: textMessage.text
-                } as ClaudeMessage;
+                const text = (message as Record<string, unknown>).text;
+                if (typeof text === 'string') {
+                  yield {
+                    type: 'assistant', 
+                    content: text
+                  } as ClaudeMessage;
+                }
               } else if ('content' in message) {
-                const contentMessage = message as unknown as { content: unknown };
-                yield {
-                  type: 'assistant',
-                  content: String(contentMessage.content)
-                } as ClaudeMessage;
+                const content = (message as Record<string, unknown>).content;
+                if (content !== undefined && content !== null) {
+                  yield {
+                    type: 'assistant',
+                    content: String(content)
+                  } as ClaudeMessage;
+                }
               }
             }
           }
