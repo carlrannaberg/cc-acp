@@ -50,6 +50,26 @@ Add to your Zed settings.json:
 }
 ```
 
+### Configure SDK via environment
+
+Prefer environment variables to control the Claude Code SDK. Example (enable specific tools, set model and turns):
+
+```json
+{
+  "agent_servers": {
+    "Claude Code": {
+      "command": "claude-code-acp",
+      "env": {
+        "ACP_LOG_LEVEL": "debug",
+        "CLAUDE_MODEL": "sonnet",
+        "CLAUDE_ALLOWED_TOOLS": "Read,Edit",
+        "CLAUDE_MAX_TURNS": "40"
+      }
+    }
+  }
+}
+```
+
 ## Basic Usage
 
 1. Open Zed Editor
@@ -68,6 +88,25 @@ Add to your Zed settings.json:
 - `ENABLE_SMART_SEARCH`: Enable glob fallback for file resolution (default: true)
 - `RESPECT_GITIGNORE`: Filter files by gitignore rules (default: true)
 - `CLAUDE_MAX_TURNS` (optional): If set, limits internal reasoning/tool turns per prompt turn. If unset, the SDK's default behavior is used.
+
+Additional optional SDK passthrough variables:
+
+- `CLAUDE_MODEL`: Preferred model name for Claude Code SDK
+- `CLAUDE_FALLBACK_MODEL`: Fallback model to use when primary model unavailable
+- `CLAUDE_CUSTOM_SYSTEM_PROMPT`: Replace the SDK’s system prompt
+- `CLAUDE_APPEND_SYSTEM_PROMPT`: Append text to the system prompt
+- `CLAUDE_ADDITIONAL_DIRS`: Comma-separated list of directories to add to project context
+- `CLAUDE_PERMISSION_MODE`: One of `default|acceptEdits|bypassPermissions|plan`
+- `CLAUDE_ALLOWED_TOOLS`: Comma-separated allowlist of tools (e.g., `Read,Edit`)
+- `CLAUDE_DISALLOWED_TOOLS`: Comma-separated blocklist of tools
+- `CLAUDE_STRICT_MCP_CONFIG`: `true` to enforce strict MCP server config
+- `CLAUDE_MAX_TURNS`: Optional max internal reasoning/tool turns per prompt turn
+- `CLAUDE_MAX_THINKING_TOKENS`: Maximum tokens for Claude's thinking process
+
+Notes:
+- By default, we do not enable any tools (`allowedTools` is empty) unless you specify them via flags or env.
+- We only pass `maxTurns` to the SDK when `CLAUDE_MAX_TURNS` is set (no default cap from the agent).
+- The agent resolves the SDK CLI path internally and passes your session CWD.
 
 ## Features
 
@@ -128,7 +167,7 @@ Add to your Zed settings.json:
 
 ### Custom Config File
 ```bash
-claudeCodeACP --config /path/to/config.json
+claude-code-acp --config /path/to/config.json
 ```
 
 Config file format:
@@ -147,7 +186,7 @@ Enable detailed logging:
 ```bash
 export ACP_LOG_LEVEL=debug
 export DEBUG=true
-claudeCodeACP
+claude-code-acp
 ```
 
 ### Security Settings
@@ -157,6 +196,25 @@ export ENABLE_SMART_SEARCH=false
 export RESPECT_GITIGNORE=true
 export MAX_SESSIONS=3
 ```
+
+### SDK environment variables (full list)
+
+Set any of the following under Zed’s `agent_servers.<name>.env` to control the SDK:
+
+- `CLAUDE_MODEL`: Preferred model name for Claude Code SDK
+- `CLAUDE_FALLBACK_MODEL`: Fallback model
+- `CLAUDE_CUSTOM_SYSTEM_PROMPT`: Replace the SDK’s system prompt
+- `CLAUDE_APPEND_SYSTEM_PROMPT`: Append text to the system prompt
+- `CLAUDE_ADDITIONAL_DIRS`: Comma-separated list of directories to add
+- `CLAUDE_PERMISSION_MODE`: One of `default|acceptEdits|bypassPermissions|plan`
+- `CLAUDE_PERMISSION_PROMPT_TOOL`: Permission prompt tool name
+- `CLAUDE_EXECUTABLE`: Runtime for the SDK CLI (`node|bun|deno`)
+- `CLAUDE_EXEC_ARGS`: Comma-separated additional args for the runtime
+- `CLAUDE_ALLOWED_TOOLS`: Comma-separated allowlist of tools (e.g., `Read,Edit`)
+- `CLAUDE_DISALLOWED_TOOLS`: Comma-separated blocklist
+- `CLAUDE_STRICT_MCP_CONFIG`: `true` to enforce strict MCP server config
+- `CLAUDE_EXTRA_ARGS`: JSON of extra CLI flags for the SDK (e.g., `{"print":null}`)
+- `CLAUDE_MAX_TURNS`: Optional max internal reasoning/tool turns per prompt turn
 
 ## Development
 

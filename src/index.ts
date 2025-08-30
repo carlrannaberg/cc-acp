@@ -24,20 +24,6 @@ interface CLIOptions {
   config?: string;
   version?: boolean;
   help?: boolean;
-  model?: string;
-  fallbackModel?: string;
-  customSystemPrompt?: string;
-  appendSystemPrompt?: string;
-  addDirs?: string[];
-  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
-  permissionPromptTool?: string;
-  executable?: 'node' | 'bun' | 'deno';
-  execArgs?: string[];
-  allowedTools?: string[];
-  disallowedTools?: string[];
-  strictMcpConfig?: boolean;
-  maxTurns?: number;
-  extraArgs?: Record<string, string | null>;
 }
 
 // Validate environment variables
@@ -64,9 +50,6 @@ function validateEnvironment(): void {
 // Parse command-line arguments
 function parseArgs(argv: string[]): CLIOptions {
   const options: CLIOptions = {};
-  const addDirs: string[] = [];
-  const execArgs: string[] = [];
-  const extraArgs: Record<string, string | null> = {};
   
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
@@ -88,63 +71,7 @@ function parseArgs(argv: string[]): CLIOptions {
           process.exit(1);
         }
         break;
-      case '--model':
-        options.model = argv[++i];
-        break;
-      case '--fallback-model':
-        options.fallbackModel = argv[++i];
-        break;
-      case '--custom-system-prompt':
-        options.customSystemPrompt = argv[++i];
-        break;
-      case '--append-system-prompt':
-        options.appendSystemPrompt = argv[++i];
-        break;
-      case '--add-dir':
-        addDirs.push(argv[++i]);
-        break;
-      case '--permission-mode':
-        options.permissionMode = argv[++i] as CLIOptions['permissionMode'];
-        break;
-      case '--permission-prompt-tool':
-        options.permissionPromptTool = argv[++i];
-        break;
-      case '--executable':
-        options.executable = argv[++i] as CLIOptions['executable'];
-        break;
-      case '--exec-arg':
-        execArgs.push(argv[++i]);
-        break;
-      case '--allowed-tools':
-        options.allowedTools = (argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
-        break;
-      case '--disallowed-tools':
-        options.disallowedTools = (argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
-        break;
-      case '--strict-mcp-config':
-        options.strictMcpConfig = true;
-        break;
-      case '--max-turns': {
-        const v = parseInt(argv[++i]);
-        if (!Number.isFinite(v) || v <= 0) {
-          console.error('Error: --max-turns must be a positive integer');
-          process.exit(1);
-        }
-        options.maxTurns = v;
-        break;
-      }
-      case '--extra-arg': {
-        const kv = argv[++i];
-        const eq = kv.indexOf('=');
-        if (eq === -1) {
-          extraArgs[kv] = null;
-        } else {
-          const k = kv.slice(0, eq);
-          const v = kv.slice(eq + 1);
-          extraArgs[k] = v === '' ? null : v;
-        }
-        break;
-      }
+      // No SDK passthrough flags; prefer environment variables.
       default:
         if (arg.startsWith('-')) {
           console.error(`Error: Unknown option ${arg}`);
@@ -154,9 +81,6 @@ function parseArgs(argv: string[]): CLIOptions {
         break;
     }
   }
-  if (addDirs.length > 0) options.addDirs = addDirs;
-  if (execArgs.length > 0) options.execArgs = execArgs;
-  if (Object.keys(extraArgs).length > 0) options.extraArgs = extraArgs;
   
   return options;
 }
@@ -178,26 +102,26 @@ Options:
   --help        Show this help message
   --debug       Enable debug mode
   --config      Path to configuration file
-  --model <name>                    Set Claude model for SDK
-  --fallback-model <name>           Set fallback model
-  --custom-system-prompt <text>     Override system prompt
-  --append-system-prompt <text>     Append to system prompt
-  --add-dir <path>                  Add project directory (repeatable)
-  --permission-mode <mode>          default|acceptEdits|bypassPermissions|plan
-  --permission-prompt-tool <name>   Use SDK permission prompt tool
-  --executable <node|bun|deno>      Runtime for SDK CLI
-  --exec-arg <arg>                  Additional executable arg (repeatable)
-  --allowed-tools <a,b,c>           Allow-list tools (comma-separated)
-  --disallowed-tools <a,b,c>        Block-list tools (comma-separated)
-  --strict-mcp-config               Enforce SDK MCP config strictly
-  --max-turns <n>                   Set max internal turns (CLAUDE_MAX_TURNS)
-  --extra-arg key=value             Extra arg passed to SDK (repeatable)
 
-Environment Variables:
-  DEBUG              Enable debug logging
-  CLAUDE_API_KEY     API key for Claude SDK (optional if using Claude Code subscription)
-  ACP_LOG_LEVEL      Logging verbosity (error/warn/info/debug)
-  ACP_TIMEOUT        Session timeout in milliseconds
+Environment Variables (preferred):
+  DEBUG                       Enable debug logging
+  CLAUDE_API_KEY              API key for Claude SDK (optional if using Claude Code subscription)
+  ACP_LOG_LEVEL               Logging verbosity (error|warn|info|debug)
+  ACP_TIMEOUT                 Session timeout in milliseconds
+  CLAUDE_MODEL                Preferred Claude model
+  CLAUDE_FALLBACK_MODEL       Fallback model
+  CLAUDE_CUSTOM_SYSTEM_PROMPT Replace SDK system prompt
+  CLAUDE_APPEND_SYSTEM_PROMPT Append to system prompt
+  CLAUDE_ADDITIONAL_DIRS      Comma-separated directories to add
+  CLAUDE_PERMISSION_MODE      default|acceptEdits|bypassPermissions|plan
+  CLAUDE_PERMISSION_PROMPT_TOOL Permission prompt tool name
+  CLAUDE_EXECUTABLE           node|bun|deno
+  CLAUDE_EXEC_ARGS            Comma-separated runtime args
+  CLAUDE_ALLOWED_TOOLS        Comma-separated tool allowlist
+  CLAUDE_DISALLOWED_TOOLS     Comma-separated tool blocklist
+  CLAUDE_STRICT_MCP_CONFIG    true to enforce strict MCP config
+  CLAUDE_EXTRA_ARGS           JSON map of extra flags for SDK
+  CLAUDE_MAX_TURNS            Optional limit for internal reasoning turns
 
 For more information, visit: https://github.com/carlrannaberg/cc-acp`);
 }
@@ -220,22 +144,6 @@ async function main(): Promise<void> {
   
   // Validate environment before starting
   validateEnvironment();
-  
-  // Map CLI options to environment for agent configuration
-  if (options.model) process.env.CLAUDE_MODEL = options.model;
-  if (options.fallbackModel) process.env.CLAUDE_FALLBACK_MODEL = options.fallbackModel;
-  if (options.customSystemPrompt) process.env.CLAUDE_CUSTOM_SYSTEM_PROMPT = options.customSystemPrompt;
-  if (options.appendSystemPrompt) process.env.CLAUDE_APPEND_SYSTEM_PROMPT = options.appendSystemPrompt;
-  if (options.addDirs && options.addDirs.length > 0) process.env.CLAUDE_ADDITIONAL_DIRS = options.addDirs.join(',');
-  if (options.permissionMode) process.env.CLAUDE_PERMISSION_MODE = options.permissionMode;
-  if (options.permissionPromptTool) process.env.CLAUDE_PERMISSION_PROMPT_TOOL = options.permissionPromptTool;
-  if (options.executable) process.env.CLAUDE_EXECUTABLE = options.executable;
-  if (options.execArgs && options.execArgs.length > 0) process.env.CLAUDE_EXEC_ARGS = options.execArgs.join(',');
-  if (options.allowedTools) process.env.CLAUDE_ALLOWED_TOOLS = options.allowedTools.join(',');
-  if (options.disallowedTools) process.env.CLAUDE_DISALLOWED_TOOLS = options.disallowedTools.join(',');
-  if (options.strictMcpConfig) process.env.CLAUDE_STRICT_MCP_CONFIG = 'true';
-  if (options.maxTurns) process.env.CLAUDE_MAX_TURNS = String(options.maxTurns);
-  if (options.extraArgs && Object.keys(options.extraArgs).length > 0) process.env.CLAUDE_EXTRA_ARGS = JSON.stringify(options.extraArgs);
 
   // Set debug mode from command line or environment
   if (options.debug || process.env.DEBUG) {

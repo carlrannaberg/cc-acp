@@ -115,6 +115,19 @@ export class ClaudeACPAgent implements ACPClient {
     cacheMisses: 0,
     startTime: Date.now()
   };
+
+  // Type guard for result messages
+  private isResultMessage(message: ClaudeMessage): message is ClaudeMessage & { subtype: string; result?: string } {
+    return 'subtype' in message && typeof (message as unknown as Record<string, unknown>).subtype === 'string';
+  }
+
+  // Type guard for messages with result and subtype properties
+  private hasResultAndSubtype(message: unknown): message is { subtype: string; result?: string } {
+    return typeof message === 'object' && 
+           message !== null && 
+           'subtype' in message && 
+           typeof (message as Record<string, unknown>).subtype === 'string';
+  }
   
   // Configuration from environment
   private readonly config: AgentConfig = {
@@ -131,13 +144,10 @@ export class ClaudeACPAgent implements ACPClient {
     appendSystemPrompt: process.env.CLAUDE_APPEND_SYSTEM_PROMPT,
     additionalDirectories: process.env.CLAUDE_ADDITIONAL_DIRS ? process.env.CLAUDE_ADDITIONAL_DIRS.split(',').map(s => s.trim()).filter(Boolean) : undefined,
     permissionMode: process.env.CLAUDE_PERMISSION_MODE as AgentConfig['permissionMode'],
-    permissionPromptToolName: process.env.CLAUDE_PERMISSION_PROMPT_TOOL,
-    executable: process.env.CLAUDE_EXECUTABLE as AgentConfig['executable'],
-    executableArgs: process.env.CLAUDE_EXEC_ARGS ? process.env.CLAUDE_EXEC_ARGS.split(',').map(s => s.trim()).filter(Boolean) : undefined,
-    extraArgs: process.env.CLAUDE_EXTRA_ARGS ? (() => { try { return JSON.parse(process.env.CLAUDE_EXTRA_ARGS!); } catch { return undefined as any; } })() : undefined,
     allowedTools: process.env.CLAUDE_ALLOWED_TOOLS ? process.env.CLAUDE_ALLOWED_TOOLS.split(',').map(s => s.trim()).filter(Boolean) : undefined,
     disallowedTools: process.env.CLAUDE_DISALLOWED_TOOLS ? process.env.CLAUDE_DISALLOWED_TOOLS.split(',').map(s => s.trim()).filter(Boolean) : undefined,
-    strictMcpConfig: process.env.CLAUDE_STRICT_MCP_CONFIG === 'true'
+    strictMcpConfig: process.env.CLAUDE_STRICT_MCP_CONFIG === 'true',
+    maxThinkingTokens: process.env.CLAUDE_MAX_THINKING_TOKENS ? parseInt(process.env.CLAUDE_MAX_THINKING_TOKENS) : undefined
   };
 
   constructor(
@@ -399,20 +409,20 @@ export class ClaudeACPAgent implements ACPClient {
           return { stopReason: 'cancelled' };
         }
         // Intercept certain result subtypes to avoid duplication and surface useful info
-        if ((message as any)?.type === 'result' && typeof (message as any).subtype === 'string') {
-          const subtype = String((message as any).subtype);
+        if (this.isResultMessage(message)) {
+          const subtype = message.subtype;
           if (subtype === 'error_max_turns') {
             stopReason = 'max_turn_requests';
             await this.sendClaudeMessage(session.id, {
               type: 'assistant',
-              content: 'Reached maximum reasoning steps for this turn. If you want me to continue, say “continue” or provide more specific guidance.'
+              content: 'Reached maximum reasoning steps for this turn. If you want me to continue, say "continue" or provide more specific guidance.'
             });
             continue;
           }
           if (subtype.startsWith('error')) {
             await this.sendClaudeMessage(session.id, {
               type: 'error',
-              error: (message as any).result || subtype || 'Execution error occurred'
+              error: message.result || subtype || 'Execution error occurred'
             } as ClaudeMessage);
             emitted = true;
             continue;
@@ -994,13 +1004,11 @@ export class ClaudeACPAgent implements ACPClient {
           }
           const cliPath = self.resolveClaudeCliPath();
           const requestedMaxTurns = options.options.maxTurns;
-          const configuredMaxTurns = (self as any).config?.maxTurns as number | undefined;
+          const configuredMaxTurns = self.config.maxTurns;
           const finalMaxTurns = (requestedMaxTurns ?? configuredMaxTurns);
-          const claudeOptions: Options = {
+          const claudeOptions: ExtendedClaudeOptions = {
             abortController: options.options.abortController,
             cwd: cwdOverride || process.cwd(),
-            // Start with no tools to avoid environment/path issues; enable selectively later
-            allowedTools: options.options.allowedTools || [],
             ...(cliPath ? { pathToClaudeCodeExecutable: cliPath } : {}),
             env: envVars,
             stderr: (data: string) => {
@@ -1021,26 +1029,26 @@ export class ClaudeACPAgent implements ACPClient {
                 }).catch(() => {});
               }
             }
-          } as unknown as Options;
-          // Optional SDK options via env-configured agent settings
-          const cfg = (self as any).config as AgentConfig;
-          if (cfg.model) (claudeOptions as any).model = cfg.model;
-          if (cfg.fallbackModel) (claudeOptions as any).fallbackModel = cfg.fallbackModel;
-          if (cfg.customSystemPrompt) (claudeOptions as any).customSystemPrompt = cfg.customSystemPrompt;
-          if (cfg.appendSystemPrompt) (claudeOptions as any).appendSystemPrompt = cfg.appendSystemPrompt;
-          if (cfg.additionalDirectories) (claudeOptions as any).additionalDirectories = cfg.additionalDirectories;
-          if (cfg.permissionMode) (claudeOptions as any).permissionMode = cfg.permissionMode as any;
-          if (cfg.permissionPromptToolName) (claudeOptions as any).permissionPromptToolName = cfg.permissionPromptToolName;
-          if (cfg.executable) (claudeOptions as any).executable = cfg.executable as any;
-          if (cfg.executableArgs) (claudeOptions as any).executableArgs = cfg.executableArgs;
-          if (cfg.extraArgs) (claudeOptions as any).extraArgs = cfg.extraArgs as any;
-          if (cfg.allowedTools && (!claudeOptions.allowedTools || claudeOptions.allowedTools.length === 0)) {
-            (claudeOptions as any).allowedTools = cfg.allowedTools;
+          };
+          if (options.options.allowedTools && options.options.allowedTools.length > 0) {
+            claudeOptions.allowedTools = options.options.allowedTools;
           }
-          if (cfg.disallowedTools) (claudeOptions as any).disallowedTools = cfg.disallowedTools;
-          if (cfg.strictMcpConfig) (claudeOptions as any).strictMcpConfig = true;
+          // Optional SDK options via env-configured agent settings
+          const cfg = self.config;
+          if (cfg.model) claudeOptions.model = cfg.model;
+          if (cfg.fallbackModel) claudeOptions.fallbackModel = cfg.fallbackModel;
+          if (cfg.customSystemPrompt) claudeOptions.customSystemPrompt = cfg.customSystemPrompt;
+          if (cfg.appendSystemPrompt) claudeOptions.appendSystemPrompt = cfg.appendSystemPrompt;
+          if (cfg.additionalDirectories) claudeOptions.additionalDirectories = cfg.additionalDirectories;
+          if (cfg.permissionMode) claudeOptions.permissionMode = cfg.permissionMode;
+          if (cfg.maxThinkingTokens !== undefined && !Number.isNaN(cfg.maxThinkingTokens)) claudeOptions.maxThinkingTokens = cfg.maxThinkingTokens;
+          if (cfg.allowedTools && (!claudeOptions.allowedTools || claudeOptions.allowedTools.length === 0)) {
+            claudeOptions.allowedTools = cfg.allowedTools;
+          }
+          if (cfg.disallowedTools) claudeOptions.disallowedTools = cfg.disallowedTools;
+          if (cfg.strictMcpConfig) claudeOptions.strictMcpConfig = true;
           if (finalMaxTurns !== undefined && !Number.isNaN(finalMaxTurns)) {
-            (claudeOptions as any).maxTurns = finalMaxTurns;
+            claudeOptions.maxTurns = finalMaxTurns;
           }
           
           const claudeResponse = claudeQuery({ 
@@ -1102,11 +1110,11 @@ export class ClaudeACPAgent implements ACPClient {
               }
             } else if (message.type === 'result') {
               // Prevent duplicate content: only surface explicit error subtypes; ignore normal results
-              if ('subtype' in message && typeof (message as any).subtype === 'string') {
-                const subtype = String((message as any).subtype);
+              if ('subtype' in message && typeof message.subtype === 'string') {
+                const subtype = message.subtype;
                 if (subtype.startsWith('error')) {
-                  const resultContent = (message as any).result || subtype || 'Execution error occurred';
-                  yield { type: 'error', error: String(resultContent) } as ClaudeMessage;
+                  // Use the subtype as the error message since result property doesn't exist on this type
+                  yield { type: 'error', error: subtype || 'Execution error occurred' } as ClaudeMessage;
                 }
               }
               // Ignore non-error result messages to avoid duplicating assistant output
@@ -1222,20 +1230,31 @@ interface AgentConfig {
   enableSmartSearch: boolean;
   respectGitignore: boolean;
   maxTurns?: number;
-  // Claude SDK passthrough options (env-configurable)
   model?: string;
   fallbackModel?: string;
   customSystemPrompt?: string;
   appendSystemPrompt?: string;
   additionalDirectories?: string[];
   permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
-  permissionPromptToolName?: string;
-  executable?: 'node' | 'bun' | 'deno';
-  executableArgs?: string[];
-  extraArgs?: Record<string, string | null>;
   allowedTools?: string[];
   disallowedTools?: string[];
   strictMcpConfig?: boolean;
+  maxThinkingTokens?: number;
+}
+
+// Extended Claude Options interface for SDK
+interface ExtendedClaudeOptions extends Options {
+  model?: string;
+  fallbackModel?: string;
+  customSystemPrompt?: string;
+  appendSystemPrompt?: string;
+  additionalDirectories?: string[];
+  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  strictMcpConfig?: boolean;
+  maxThinkingTokens?: number;
+  maxTurns?: number;
 }
 
 // Legacy exports for backward compatibility
