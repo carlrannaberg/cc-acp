@@ -123,7 +123,21 @@ export class ClaudeACPAgent implements ACPClient {
     debug: process.env.DEBUG === 'true',
     claudeApiKey: process.env.CLAUDE_API_KEY,
     enableSmartSearch: process.env.ENABLE_SMART_SEARCH !== 'false',
-    respectGitignore: process.env.RESPECT_GITIGNORE !== 'false'
+    respectGitignore: process.env.RESPECT_GITIGNORE !== 'false',
+    maxTurns: process.env.CLAUDE_MAX_TURNS ? parseInt(process.env.CLAUDE_MAX_TURNS) : undefined,
+    model: process.env.CLAUDE_MODEL,
+    fallbackModel: process.env.CLAUDE_FALLBACK_MODEL,
+    customSystemPrompt: process.env.CLAUDE_CUSTOM_SYSTEM_PROMPT,
+    appendSystemPrompt: process.env.CLAUDE_APPEND_SYSTEM_PROMPT,
+    additionalDirectories: process.env.CLAUDE_ADDITIONAL_DIRS ? process.env.CLAUDE_ADDITIONAL_DIRS.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    permissionMode: process.env.CLAUDE_PERMISSION_MODE as AgentConfig['permissionMode'],
+    permissionPromptToolName: process.env.CLAUDE_PERMISSION_PROMPT_TOOL,
+    executable: process.env.CLAUDE_EXECUTABLE as AgentConfig['executable'],
+    executableArgs: process.env.CLAUDE_EXEC_ARGS ? process.env.CLAUDE_EXEC_ARGS.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    extraArgs: process.env.CLAUDE_EXTRA_ARGS ? (() => { try { return JSON.parse(process.env.CLAUDE_EXTRA_ARGS!); } catch { return undefined as any; } })() : undefined,
+    allowedTools: process.env.CLAUDE_ALLOWED_TOOLS ? process.env.CLAUDE_ALLOWED_TOOLS.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    disallowedTools: process.env.CLAUDE_DISALLOWED_TOOLS ? process.env.CLAUDE_DISALLOWED_TOOLS.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    strictMcpConfig: process.env.CLAUDE_STRICT_MCP_CONFIG === 'true'
   };
 
   constructor(
@@ -378,10 +392,33 @@ export class ClaudeACPAgent implements ACPClient {
 
       // Stream response chunks
       let emitted = false;
+      let stopReason: 'end_turn' | 'max_turn_requests' = 'end_turn';
       for await (const message of response) {
         if (abortController.signal.aborted) {
           this.releasePooledSDK(session.id);
           return { stopReason: 'cancelled' };
+        }
+        // Intercept certain result subtypes to avoid duplication and surface useful info
+        if ((message as any)?.type === 'result' && typeof (message as any).subtype === 'string') {
+          const subtype = String((message as any).subtype);
+          if (subtype === 'error_max_turns') {
+            stopReason = 'max_turn_requests';
+            await this.sendClaudeMessage(session.id, {
+              type: 'assistant',
+              content: 'Reached maximum reasoning steps for this turn. If you want me to continue, say “continue” or provide more specific guidance.'
+            });
+            continue;
+          }
+          if (subtype.startsWith('error')) {
+            await this.sendClaudeMessage(session.id, {
+              type: 'error',
+              error: (message as any).result || subtype || 'Execution error occurred'
+            } as ClaudeMessage);
+            emitted = true;
+            continue;
+          }
+          // Ignore normal success result to prevent duplicated assistant output
+          continue;
         }
         await this.sendClaudeMessage(session.id, message);
         emitted = true;
@@ -412,7 +449,7 @@ export class ClaudeACPAgent implements ACPClient {
         console.error(`Slow request detected: ${responseTime}ms for session ${params.sessionId}`);
       }
 
-      return { stopReason: 'end_turn' };
+      return { stopReason };
     } catch (error) {
       this.performanceMetrics.errorCount++;
       this.releasePooledSDK(session.id);
@@ -956,10 +993,12 @@ export class ClaudeACPAgent implements ACPClient {
             delete envVars.DEBUG;
           }
           const cliPath = self.resolveClaudeCliPath();
+          const requestedMaxTurns = options.options.maxTurns;
+          const configuredMaxTurns = (self as any).config?.maxTurns as number | undefined;
+          const finalMaxTurns = (requestedMaxTurns ?? configuredMaxTurns);
           const claudeOptions: Options = {
             abortController: options.options.abortController,
             cwd: cwdOverride || process.cwd(),
-            maxTurns: options.options.maxTurns || 10,
             // Start with no tools to avoid environment/path issues; enable selectively later
             allowedTools: options.options.allowedTools || [],
             ...(cliPath ? { pathToClaudeCodeExecutable: cliPath } : {}),
@@ -983,6 +1022,26 @@ export class ClaudeACPAgent implements ACPClient {
               }
             }
           } as unknown as Options;
+          // Optional SDK options via env-configured agent settings
+          const cfg = (self as any).config as AgentConfig;
+          if (cfg.model) (claudeOptions as any).model = cfg.model;
+          if (cfg.fallbackModel) (claudeOptions as any).fallbackModel = cfg.fallbackModel;
+          if (cfg.customSystemPrompt) (claudeOptions as any).customSystemPrompt = cfg.customSystemPrompt;
+          if (cfg.appendSystemPrompt) (claudeOptions as any).appendSystemPrompt = cfg.appendSystemPrompt;
+          if (cfg.additionalDirectories) (claudeOptions as any).additionalDirectories = cfg.additionalDirectories;
+          if (cfg.permissionMode) (claudeOptions as any).permissionMode = cfg.permissionMode as any;
+          if (cfg.permissionPromptToolName) (claudeOptions as any).permissionPromptToolName = cfg.permissionPromptToolName;
+          if (cfg.executable) (claudeOptions as any).executable = cfg.executable as any;
+          if (cfg.executableArgs) (claudeOptions as any).executableArgs = cfg.executableArgs;
+          if (cfg.extraArgs) (claudeOptions as any).extraArgs = cfg.extraArgs as any;
+          if (cfg.allowedTools && (!claudeOptions.allowedTools || claudeOptions.allowedTools.length === 0)) {
+            (claudeOptions as any).allowedTools = cfg.allowedTools;
+          }
+          if (cfg.disallowedTools) (claudeOptions as any).disallowedTools = cfg.disallowedTools;
+          if (cfg.strictMcpConfig) (claudeOptions as any).strictMcpConfig = true;
+          if (finalMaxTurns !== undefined && !Number.isNaN(finalMaxTurns)) {
+            (claudeOptions as any).maxTurns = finalMaxTurns;
+          }
           
           const claudeResponse = claudeQuery({ 
             prompt: options.prompt, 
@@ -1162,6 +1221,21 @@ interface AgentConfig {
   claudeApiKey?: string;
   enableSmartSearch: boolean;
   respectGitignore: boolean;
+  maxTurns?: number;
+  // Claude SDK passthrough options (env-configurable)
+  model?: string;
+  fallbackModel?: string;
+  customSystemPrompt?: string;
+  appendSystemPrompt?: string;
+  additionalDirectories?: string[];
+  permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
+  permissionPromptToolName?: string;
+  executable?: 'node' | 'bun' | 'deno';
+  executableArgs?: string[];
+  extraArgs?: Record<string, string | null>;
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  strictMcpConfig?: boolean;
 }
 
 // Legacy exports for backward compatibility

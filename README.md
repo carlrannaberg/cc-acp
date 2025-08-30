@@ -67,6 +67,7 @@ Add to your Zed settings.json:
 - `SESSION_TIMEOUT_MS`: Session timeout in milliseconds (default: 3600000)
 - `ENABLE_SMART_SEARCH`: Enable glob fallback for file resolution (default: true)
 - `RESPECT_GITIGNORE`: Filter files by gitignore rules (default: true)
+- `CLAUDE_MAX_TURNS` (optional): If set, limits internal reasoning/tool turns per prompt turn. If unset, the SDK's default behavior is used.
 
 ## Features
 

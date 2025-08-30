@@ -224,6 +224,8 @@ claude-code-acp/
 │   │   └── filesystem.ts # File system proxy
 │   ├── utils/            # Utilities
 │   │   ├── errors.ts    # Error handling
+│   │   ├── path.ts      # Path utilities
+│   │   ├── performance.ts # Performance monitoring
 │   │   └── types.ts     # Shared types
 │   ├── __tests__/        # Unit tests
 │   └── index.ts          # CLI entry point
