@@ -87,7 +87,7 @@ function parseArgs(argv: string[]): CLIOptions {
 
 // Show version information
 function showVersion(): void {
-  console.log(`claude-code-acp version ${VERSION}`);
+  console.log(`cc-acp version ${VERSION}`);
 }
 
 // Show help text
@@ -95,7 +95,7 @@ function showHelp(): void {
   console.log(`
 Claude Code ACP Agent
 
-Usage: claude-code-acp [options]
+Usage: cc-acp [options]
 
 Options:
   --version     Show version information

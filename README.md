@@ -6,7 +6,7 @@ Enable Claude Code as an AI assistant in Zed Editor via the Agent Client Protoco
 
 ### From npm
 ```bash
-npm install -g claude-code-acp
+npm install -g cc-acp
 ```
 
 ### From source
@@ -27,7 +27,7 @@ Add to your Zed settings.json:
 {
   "agent_servers": {
     "Claude Code": {
-      "command": "claude-code-acp",
+      "command": "cc-acp",
       "args": [],
       "env": {}
     }
@@ -40,7 +40,7 @@ Add to your Zed settings.json:
 {
   "agent_servers": {
     "Claude Code": {
-      "command": "claude-code-acp",
+      "command": "cc-acp",
       "args": [],
       "env": {
         "CLAUDE_API_KEY": "sk-ant-your-api-key"
@@ -58,7 +58,7 @@ Prefer environment variables to control the Claude Code SDK. Example (enable spe
 {
   "agent_servers": {
     "Claude Code": {
-      "command": "claude-code-acp",
+      "command": "cc-acp",
       "env": {
         "ACP_LOG_LEVEL": "debug",
         "CLAUDE_MODEL": "sonnet",
@@ -138,9 +138,9 @@ Notes:
 
 ### Agent not responding
 - Check API key is set correctly: `echo $CLAUDE_API_KEY`
-- Verify claude-code-acp is in PATH: `which claude-code-acp`
+- Verify cc-acp is in PATH: `which cc-acp`
 - Check Zed logs: `~/Library/Logs/Zed/Zed.log` (macOS) or `~/.local/state/zed/log` (Linux)
-- Test agent directly: `claude-code-acp --help`
+- Test agent directly: `cc-acp --help`
 
 ### Permission dialogs not appearing
 - Ensure Zed is up to date (v0.162.0+)
@@ -151,7 +151,7 @@ Notes:
 - Use relative paths from project root
 - Ensure files are within project bounds
 - Check gitignore settings if files are hidden
-- Enable debug mode: `DEBUG=true claude-code-acp`
+- Enable debug mode: `DEBUG=true cc-acp`
 
 ### Connection issues
 - Check stdin/stdout are not being used by other processes
@@ -167,7 +167,7 @@ Notes:
 
 ### Custom Config File
 ```bash
-claude-code-acp --config /path/to/config.json
+cc-acp --config /path/to/config.json
 ```
 
 Config file format:
@@ -186,7 +186,7 @@ Enable detailed logging:
 ```bash
 export ACP_LOG_LEVEL=debug
 export DEBUG=true
-claude-code-acp
+cc-acp
 ```
 
 ### Security Settings

@@ -188,7 +188,7 @@ function getTestHelpText(): string {
   return `
 Claude Code ACP Agent
 
-Usage: claude-code-acp [options]
+Usage: cc-acp [options]
 
 Options:
   --version     Show version information

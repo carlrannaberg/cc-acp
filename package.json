@@ -4,7 +4,7 @@
   "description": "Claude Code agent for Zed Editor via Agent Client Protocol",
   "main": "dist/index.js",
   "bin": {
-    "claude-code-acp": "./dist/index.js"
+    "cc-acp": "./dist/index.js"
   },
   "files": [
     "dist",
