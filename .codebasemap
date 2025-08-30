@@ -2,8 +2,8 @@
   "metadata": {
     "version": 1,
     "root": "/Users/carl/Development/agents/cc-acp",
-    "createdAt": "2025-08-29T22:05:50.193Z",
-    "updatedAt": "2025-08-29T22:05:50.193Z",
+    "createdAt": "2025-08-30T08:26:52.505Z",
+    "updatedAt": "2025-08-30T08:26:52.505Z",
     "totalFiles": 27
   },
   "tree": {
@@ -1398,6 +1398,14 @@
         },
         {
           "from": "../protocol/connection.js",
+          "kind": "import"
+        },
+        {
+          "from": "path",
+          "kind": "import"
+        },
+        {
+          "from": "os",
           "kind": "import"
         },
         {

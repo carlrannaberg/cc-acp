@@ -348,17 +348,19 @@ export class ClaudeACPAgent implements ACPClient {
       const pooledSDK = this.getPooledClaudeSDK(session.id, session.config.cwd);
       
       // Query Claude SDK
-      // Send a brief diagnostic message to help identify environment issues in Zed logs
-      await this.sessionUpdate({
-        sessionId: session.id,
-        update: {
-          sessionUpdate: 'agent_thought_chunk',
-          content: {
-            type: 'text',
-            text: `[Diag] cwd=${session.config.cwd} cliPath=${this.resolveClaudeCliPath() ?? 'auto'} HOME=${process.env.HOME ?? ''} XDG_CONFIG_HOME=${process.env.XDG_CONFIG_HOME ?? ''}`
+      // Send a brief diagnostic message only in debug mode
+      if (this.config.debug) {
+        await this.sessionUpdate({
+          sessionId: session.id,
+          update: {
+            sessionUpdate: 'agent_thought_chunk',
+            content: {
+              type: 'text',
+              text: `[Diag] cwd=${session.config.cwd} cliPath=${this.resolveClaudeCliPath() ?? 'auto'} HOME=${process.env.HOME ?? ''} XDG_CONFIG_HOME=${process.env.XDG_CONFIG_HOME ?? ''}`
+            }
           }
-        }
-      });
+        });
+      }
 
       const response = await pooledSDK.query({
         prompt: promptText,
@@ -949,6 +951,10 @@ export class ClaudeACPAgent implements ACPClient {
           if (!envVars.XDG_CONFIG_HOME && envVars.HOME) {
             envVars.XDG_CONFIG_HOME = path.join(envVars.HOME, '.config');
           }
+          // Avoid flooding stderr with SDK debug logs; don't propagate DEBUG to child
+          if (envVars.DEBUG) {
+            delete envVars.DEBUG;
+          }
           const cliPath = self.resolveClaudeCliPath();
           const claudeOptions: Options = {
             abortController: options.options.abortController,
@@ -960,9 +966,13 @@ export class ClaudeACPAgent implements ACPClient {
             env: envVars,
             stderr: (data: string) => {
               const text = String(data);
-              // Forward a trimmed stderr line to client for easier diagnosis in Zed
-              const msg = text.trim().split('\n')[0]?.slice(0, 500);
-              if (msg) {
+              if (!self.config.debug) return; // Only forward in debug mode
+              const firstLine = text.trim().split('\n')[0] || '';
+              // Skip noisy debug-only lines
+              const ignore = firstLine.includes('[DEBUG]') || firstLine.length === 0;
+              const looksError = /\b(error|ERR_|not found|failed)\b/i.test(firstLine);
+              if (!ignore && looksError) {
+                const msg = firstLine.slice(0, 500);
                 self.sessionUpdate({
                   sessionId: options.options.conversationId || 'unknown',
                   update: {
