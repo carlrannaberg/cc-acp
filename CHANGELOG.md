@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - TBD (First Release)
+## [0.1.0] - 2025-08-30
 
 Initial release of **cc-acp**, a Claude Code agent that enables AI-powered coding assistance directly within Zed Editor through the Agent Client Protocol (ACP). This release provides a production-ready agent with comprehensive file operations, intelligent code understanding, and seamless integration with Claude's AI capabilities.
 
