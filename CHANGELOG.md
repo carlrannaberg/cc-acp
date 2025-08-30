@@ -15,14 +15,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive build scripts with minification and development modes
 - Coverage reporting integration
 - Professional npm package metadata and keywords
+- Claude Code SDK reference documentation (overview, headless mode, TypeScript)
+- Comprehensive SDK configuration support via environment variables
+- Support for CLAUDE_MAX_TURNS, CLAUDE_MODEL, CLAUDE_PERMISSION_MODE, etc.
+- Enhanced debug logging with conditional output
+- Zed integration diagnostics and improved reliability
 
 ### Changed
 - License changed from ISC to MIT
 - Enhanced package.json with proper publishing configuration
 - Improved build process with minification for production
+- **BREAKING**: Executable name changed from `claude-code-acp` to `cc-acp`
+- Enhanced SDK configuration eliminates all TypeScript 'any' types
+- Refactored configuration mapping for better maintainability
+- Improved type safety throughout codebase with proper interfaces
+- Simplified CLI to prefer environment variables over command-line flags
+- Better message type handling with safer type guards
 
 ### Security
 - Added .npmignore to prevent source code and sensitive files from being published
+- Eliminated all 'any' types for better type safety
+- Improved input validation with proper type checking
+
+### Fixed
+- Reduced noisy debug output in Zed integration
+- Better error handling with max_turn_requests support
+- Improved authentication system and protocol compliance
 
 ## [1.0.0] - 2024-XX-XX
 
