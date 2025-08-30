@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import { Readable, Writable } from 'stream';
 import { Connection } from '../protocol/connection.js';
+import * as path from 'path';
+import * as os from 'os';
 import ACPFileSystem from '../files/filesystem.js';
 import { SessionManager, Session } from './session.js';
 import { PermissionManager } from './permissions.js';
@@ -129,6 +131,16 @@ export class ClaudeACPAgent implements ACPClient {
     output: Writable = process.stdout,
     diskFileSystem?: FileSystemService
   ) {
+    // Ensure critical environment defaults are present (best-effort)
+    if (!process.env.HOME && process.platform !== 'win32') {
+      process.env.HOME = os.homedir?.() || process.env.HOME || '';
+    }
+    if (!process.env.XDG_CONFIG_HOME && process.env.HOME) {
+      process.env.XDG_CONFIG_HOME = path.join(process.env.HOME, '.config');
+    }
+    if (process.env.ACP_LOG_LEVEL === 'debug' && process.env.DEBUG !== 'true') {
+      process.env.DEBUG = 'true';
+    }
     // Create default disk filesystem if not provided
     this.diskFileSystem = diskFileSystem || new ACPFileSystem(this, '', undefined, process.cwd());
     
@@ -333,9 +345,21 @@ export class ClaudeACPAgent implements ACPClient {
       const promptText = this.contentBlocksToString(params.prompt);
 
       // Get pooled Claude SDK for better performance
-      const pooledSDK = this.getPooledClaudeSDK(session.id);
+      const pooledSDK = this.getPooledClaudeSDK(session.id, session.config.cwd);
       
       // Query Claude SDK
+      // Send a brief diagnostic message to help identify environment issues in Zed logs
+      await this.sessionUpdate({
+        sessionId: session.id,
+        update: {
+          sessionUpdate: 'agent_thought_chunk',
+          content: {
+            type: 'text',
+            text: `[Diag] cwd=${session.config.cwd} cliPath=${this.resolveClaudeCliPath() ?? 'auto'} HOME=${process.env.HOME ?? ''} XDG_CONFIG_HOME=${process.env.XDG_CONFIG_HOME ?? ''}`
+          }
+        }
+      });
+
       const response = await pooledSDK.query({
         prompt: promptText,
         options: {
@@ -351,13 +375,28 @@ export class ClaudeACPAgent implements ACPClient {
       });
 
       // Stream response chunks
+      let emitted = false;
       for await (const message of response) {
         if (abortController.signal.aborted) {
           this.releasePooledSDK(session.id);
           return { stopReason: 'cancelled' };
         }
-
         await this.sendClaudeMessage(session.id, message);
+        emitted = true;
+      }
+      
+      // If the model produced no output, send a helpful fallback message
+      if (!emitted) {
+        await this.sessionUpdate({
+          sessionId: session.id,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: {
+              type: 'text',
+              text: 'No output received from model. Ensure Claude Code authentication is configured (subscription login or CLAUDE_API_KEY).' 
+            }
+          }
+        });
       }
       
       // Release SDK back to pool
@@ -380,14 +419,19 @@ export class ClaudeACPAgent implements ACPClient {
         return { stopReason: 'cancelled' };
       }
       
-      // Send error to client
+      // Send error to client with brief diagnostics
+      const err = error as Error;
+      const diag = [
+        `Error: ${err?.message || String(error)}`,
+        this.config.debug && err?.stack ? `\nStack: ${err.stack.split('\n').slice(0,3).join('\n')}` : ''
+      ].filter(Boolean).join('');
       await this.sessionUpdate({
         sessionId: params.sessionId,
         update: {
           sessionUpdate: 'agent_message_chunk',
           content: {
             type: 'text',
-            text: `Error: ${error instanceof Error ? error.message : String(error)}`
+            text: diag
           }
         }
       });
@@ -775,7 +819,7 @@ export class ClaudeACPAgent implements ACPClient {
   /**
    * Get or create SDK from pool
    */
-  private getPooledClaudeSDK(conversationId?: string): ClaudeSDK {
+  private getPooledClaudeSDK(conversationId?: string, cwdOverride?: string): ClaudeSDK {
     const poolKey = conversationId || 'default';
     const poolItem = this.claudeSDKPool.get(poolKey);
     
@@ -788,7 +832,7 @@ export class ClaudeACPAgent implements ACPClient {
     
     // Create new SDK if pool not full
     if (this.claudeSDKPool.size < this.MAX_POOL_SIZE) {
-      const sdk = this.createClaudeSDK();
+      const sdk = this.createClaudeSDK(cwdOverride);
       this.claudeSDKPool.set(poolKey, {
         sdk,
         lastUsed: Date.now(),
@@ -800,7 +844,7 @@ export class ClaudeACPAgent implements ACPClient {
     
     // Fallback to creating new SDK
     this.performanceMetrics.cacheMisses++;
-    return this.createClaudeSDK();
+    return this.createClaudeSDK(cwdOverride);
   }
   
   /**
@@ -876,12 +920,13 @@ export class ClaudeACPAgent implements ACPClient {
     });
   }
 
-  private createClaudeSDK(): ClaudeSDK {
+  private createClaudeSDK(cwdOverride?: string): ClaudeSDK {
     // API key is optional - Claude Code SDK can use existing authentication
     if (!this.config.claudeApiKey) {
       console.info('[ACP] No CLAUDE_API_KEY found, using Claude Code subscription authentication');
     }
 
+    const self = this;
     return {
       async *query(options: {
         prompt: string;
@@ -897,12 +942,37 @@ export class ClaudeACPAgent implements ACPClient {
       }) {
         try {
           // Use real Claude Code SDK with correct API
+          const envVars: Record<string, string> = { ...process.env } as Record<string, string>;
+          if (!envVars.HOME && process.platform !== 'win32') {
+            envVars.HOME = os.homedir() || '';
+          }
+          if (!envVars.XDG_CONFIG_HOME && envVars.HOME) {
+            envVars.XDG_CONFIG_HOME = path.join(envVars.HOME, '.config');
+          }
+          const cliPath = self.resolveClaudeCliPath();
           const claudeOptions: Options = {
             abortController: options.options.abortController,
-            cwd: process.cwd(),
+            cwd: cwdOverride || process.cwd(),
             maxTurns: options.options.maxTurns || 10,
-            allowedTools: options.options.allowedTools || ['Read', 'Edit', 'Bash', 'Grep', 'Glob']
-          };
+            // Start with no tools to avoid environment/path issues; enable selectively later
+            allowedTools: options.options.allowedTools || [],
+            ...(cliPath ? { pathToClaudeCodeExecutable: cliPath } : {}),
+            env: envVars,
+            stderr: (data: string) => {
+              const text = String(data);
+              // Forward a trimmed stderr line to client for easier diagnosis in Zed
+              const msg = text.trim().split('\n')[0]?.slice(0, 500);
+              if (msg) {
+                self.sessionUpdate({
+                  sessionId: options.options.conversationId || 'unknown',
+                  update: {
+                    sessionUpdate: 'agent_thought_chunk',
+                    content: { type: 'text', text: `[Claude stderr] ${msg}` }
+                  }
+                }).catch(() => {});
+              }
+            }
+          } as unknown as Options;
           
           const claudeResponse = claudeQuery({ 
             prompt: options.prompt, 
@@ -962,14 +1032,15 @@ export class ClaudeACPAgent implements ACPClient {
                 } as ClaudeMessage;
               }
             } else if (message.type === 'result') {
-              // Handle both success and error result types
-              const resultContent = 'result' in message ? message.result : 
-                                  'subtype' in message && message.subtype === 'error_max_turns' ? 'Maximum turns reached' :
-                                  'Execution error occurred';
-              yield {
-                type: 'assistant',
-                content: String(resultContent)
-              } as ClaudeMessage;
+              // Prevent duplicate content: only surface explicit error subtypes; ignore normal results
+              if ('subtype' in message && typeof (message as any).subtype === 'string') {
+                const subtype = String((message as any).subtype);
+                if (subtype.startsWith('error')) {
+                  const resultContent = (message as any).result || subtype || 'Execution error occurred';
+                  yield { type: 'error', error: String(resultContent) } as ClaudeMessage;
+                }
+              }
+              // Ignore non-error result messages to avoid duplicating assistant output
             } else {
               // Handle any other message types by trying to extract text content
               console.debug('[ACP] Unknown message type, attempting to extract text:', message.type);
@@ -996,6 +1067,17 @@ export class ClaudeACPAgent implements ACPClient {
         }
       }
     };
+  }
+
+  private resolveClaudeCliPath(): string | null {
+    try {
+      const pkgJsonPath = require.resolve('@anthropic-ai/claude-code/package.json');
+      const dir = path.dirname(pkgJsonPath);
+      const cli = path.join(dir, 'cli.js');
+      return cli;
+    } catch {
+      return null;
+    }
   }
 
   private contentBlocksToString(blocks: ContentBlock[]): string {
@@ -1046,13 +1128,16 @@ export class ClaudeACPAgent implements ACPClient {
   }
 
   private async sendClaudeMessage(sessionId: string, message: ClaudeMessage): Promise<void> {
+    const text = message.content?.trim() || (message.error ? `Error: ${message.error}` : '');
+    if (!text) return; // Avoid sending empty chunks
+
     await this.sessionUpdate({
       sessionId,
       update: {
         sessionUpdate: 'agent_message_chunk',
         content: {
           type: 'text',
-          text: message.content || ''
+          text
         }
       }
     });
