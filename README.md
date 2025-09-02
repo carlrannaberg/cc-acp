@@ -6,7 +6,7 @@ Enable Claude Code as an AI assistant in Zed Editor via the Agent Client Protoco
 
 ### From npm
 ```bash
-npm install -g cc-acp
+npm install -g claude-code-acp
 ```
 
 ### From source
