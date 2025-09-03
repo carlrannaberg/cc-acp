@@ -1,6 +1,6 @@
 {
   "name": "claude-code-acp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Claude Code agent for Zed Editor via Agent Client Protocol",
   "main": "dist/index.js",
   "bin": {
